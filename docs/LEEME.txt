@@ -1,4 +1,4 @@
-VISOR 3D NOR-ORIENTE
+VISOR 3D NOR-ORIENTE$
 ====================
 
 Abrir:       doble clic en index.html (Chrome o Edge). No necesita servidor.
