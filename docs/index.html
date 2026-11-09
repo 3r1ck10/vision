@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Visor 3D Nor-Oriente</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Atkinson+Hyperlegible:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/visor.css">
+</head>
+<body>
+<div id="scene"></div>
+<div id="labels"></div>
+<div id="loading"><div class="ld"><b>Visor 3D Nor-Oriente</b><div class="bar"><i id="loadbar"></i></div><div class="ldrow"><span id="loadmsg">Preparando…</span><span id="loadpct">0 %</span></div></div></div>
+
+<aside id="layers" class="ui">
+  <div>
+    <h1 id="titulo">Visor 3D Nor-Oriente</h1>
+    <div class="sub" id="subtitulo">Amazonas · Cajamarca · Lambayeque</div>
+    <a class="dom" id="otroDom" href="sudamerica.html">Ver Sudamérica →</a>
+  </div>
+  <section class="grp">
+    <span class="lbl">Modelo</span>
+    <div class="seg" id="segModel"></div>
+    <div class="note" id="modelNote"></div>
+  </section>
+  <section class="grp">
+    <span class="lbl">Color del terreno</span>
+    <div class="seg" id="segColor"></div>
+    <div id="legend"><canvas id="legendCv" width="270" height="12"></canvas><div class="ticks" id="legendTicks"></div></div>
+  </section>
+  <section class="grp">
+    <span class="lbl">Viento (partículas)</span>
+    <div class="seg" id="segWind"></div>
+    <div class="row"><span>Densidad</span><div class="seg" id="segWDens"></div></div>
+    <div class="row"><span>Estelas</span><div class="seg" id="segWTail"></div></div>
+    <div class="row"><span>Color</span><div class="seg" id="segWCol"></div></div>
+    <div id="wLegend"><canvas id="wCv" width="270" height="12"></canvas><div class="ticks" id="wTicks"></div><div class="note" id="wNote"></div></div>
+  </section>
+  <details class="grp plegable" data-k="isol">
+    <summary class="lbl">Isolíneas <span id="isoCnt" class="cnt cero"></span></summary>
+    <label class="chk"><input type="checkbox" id="cSlp"> Presión a nivel del mar <small class="muted" id="slpPaso"></small></label>
+    <label class="chk"><input type="checkbox" id="cZ500"> Altura geopotencial 500 hPa <small class="muted" id="zPaso"></small></label>
+    <div class="note" id="isoNote"></div>
+  </details>
+  <details class="grp plegable" data-k="nubes">
+    <summary class="lbl">Nubes y lluvia</summary>
+    <label class="chk"><input type="checkbox" id="cClouds"> Nubes 3D</label>
+    <div class="capas" role="group" aria-label="Capas de nubes">
+      <label class="chk"><input type="checkbox" id="cBaja" checked> Bajas</label>
+      <label class="chk"><input type="checkbox" id="cMedia" checked> Medias</label>
+      <label class="chk"><input type="checkbox" id="cAlta" checked> Altas</label>
+    </div>
+    <div class="row"><span>Opacidad nubes altas</span><input type="range" id="rAlta" min="0.05" max="1" step="0.05" value="0.35"><output id="oAlta">35 %</output></div>
+    <div class="row"><span>Densidad nubes</span><input type="range" id="rDens" min="0.1" max="2" step="0.05" value="0.7"><output id="oDens">0.70</output></div>
+    <label class="chk"><input type="checkbox" id="cRain" checked> Lluvia (gotas)</label>
+  </details>
+  <details class="grp plegable" data-k="campo">
+    <summary class="lbl">Campo en altura <span id="campoCnt" class="cnt cero"></span></summary>
+    <div class="seg" id="segHum"></div>
+    <div class="seg" id="segHumLev" hidden></div>
+    <div id="humLegend" hidden><canvas id="humCv" width="270" height="12"></canvas><div class="ticks" id="humTicks"></div><div class="note" id="humNote"></div></div>
+    <div class="note">En los niveles que tienen viento (925 a 250 hPa) el viento pasa al mismo nivel. Sus partículas se colorean por velocidad; con «Viento → Color: Como el campo» toman el color de este campo (la humedad o el calor que transportan, o si el aire sube o baja).</div>
+  </details>
+  <details class="grp plegable" id="avisoGrp" data-k="avisos">
+    <summary class="lbl">Avisos de viento a 10 m <span id="avisoCount" class="cnt"></span></summary>
+    <div class="row"><span>Viento medio ≥ (m/s)</span><input type="range" id="rUmbW" min="4" max="22" step="1" value="8"><output id="oUmbW">8</output></div>
+    <div class="row" id="rowUmbG"><span>Ráfaga ≥ (m/s, ECMWF)</span><input type="range" id="rUmbG" min="7" max="33" step="1" value="14"><output id="oUmbG">14</output></div>
+    <div id="avisos"></div>
+    <div class="note" id="avisoNote"></div>
+  </details>
+  <details class="grp plegable" data-k="mapa">
+    <summary class="lbl">Mapa y puntos</summary>
+    <label class="chk" id="limRow"><input type="checkbox" id="cLim" checked> <span id="limTxt">Límites de departamentos</span></label>
+    <div class="row"><span>Puntos de pronóstico</span></div>
+    <div class="seg" id="segPin"></div>
+  </details>
+  <details class="grp plegable" data-k="vista">
+    <summary class="lbl">Vista</summary>
+    <div class="row"><span>Exageración vertical</span><input type="range" id="rExag" min="1" max="12" step="0.5" value="6"><output id="oExag">6×</output></div>
+    <div class="row"><span>Iluminación</span></div>
+    <div class="seg" id="segLuz"></div>
+    <div class="row"><span>Calidad gráfica</span></div>
+    <div class="seg" id="segQ"></div>
+  </details>
+  <details class="grp plegable" data-k="ayuda">
+    <summary class="lbl">Ayuda</summary>
+    <div class="note">Clic en un punto para su meteograma y tabla diaria. <b>Doble clic</b> en el terreno agrega un punto temporal.<br><b>Izquierdo</b> gira · <b>medio o derecho</b> desplaza la vista · <b>rueda</b> acerca · <b>flechas</b> desplazan.</div>
+  </details>
+</aside>
+
+<aside id="point" class="ui" hidden>
+  <button class="x" id="closePt" type="button" aria-label="Cerrar">✕</button>
+  <div>
+    <h2 id="ptName"></h2>
+    <div class="sub" id="ptMeta"></div>
+  </div>
+  <canvas id="meteo"></canvas>
+  <div class="tblwrap"><table id="daily"></table></div>
+  <div class="note" id="dailyNote"></div>
+  <div class="grp">
+    <span class="lbl">Ver en internet</span>
+    <div class="links" id="ptLinks"></div>
+  </div>
+</aside>
+
+<div id="timeline" class="ui">
+  <button id="play" type="button" aria-label="Reproducir">▶</button>
+  <div id="clock">—<small>—</small></div>
+  <div class="tl">
+    <input type="range" id="tslider" min="0" max="144" step="0.05" value="0" aria-label="Hora del pronóstico">
+    <div id="days"></div>
+  </div>
+  <div class="speed">Velocidad
+    <select id="speed"><option value="0.75">0.75 h/s</option><option value="1.5" selected>1.5 h/s</option><option value="3">3 h/s</option><option value="6">6 h/s</option></select>
+  </div>
+</div>
+<div id="tip" hidden></div>
+
+<!-- indice.js lo genera herramientas\actualizar_datos.bat; cargador.js baja Three.js y los datos -->
+<script src="data/indice.js"></script>
+<script src="js/cargador.js"></script>
+</body>
+</html>

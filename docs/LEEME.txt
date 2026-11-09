@@ -1,0 +1,59 @@
+VISOR 3D NOR-ORIENTE
+====================
+
+Abrir:       doble clic en index.html (Chrome o Edge). No necesita servidor.
+Actualizar:  doble clic en herramientas\actualizar_datos.bat
+             1. Lee los puntos de D:\interpgrads\puntos_pronosticos.xlsx (columnas A nombre, B latitud, C longitud).
+             2. Extrae GFS 0.25, ETA 22 km y WRF 22 km de D:\interpgrads\Datos\00\ (usa wgrib2 de OpenGrADS).
+             3. Lee ECMWF IFS 0.25 de D:\interpgrads\Datos\00\ECMWF\27.5Km (entorno grib con ecCodes;
+                si falta algun paso lo baja de data.ecmwf.int).
+             4. Construye el relieve la primera vez (AWS Terrain Tiles, internet).
+             5. Empaqueta todo comprimido en data\*.js (unos 1 MB en total).
+
+Carpetas:
+  index.html          pagina principal
+  css\visor.css       estilos
+  js\cargador.js      barra de carga: baja Three.js y los datos en paralelo y los descomprime
+  js\visor.js         logica 3D (Three.js)
+  data\               datos comprimidos que lee el navegador (indice.js, dem.js, gfs.js, ...)
+  herramientas\       scripts de Python y el .bat
+  herramientas\crudo\ datos intermedios en JSON (no hace falta subirlos)
+
+Internet:
+  Three.js y las fuentes se cargan desde CDN (cdn.jsdelivr.net, fonts.googleapis.com).
+  Para usarlo sin conexion, descarga estos dos archivos a la carpeta js\ y cambia las dos
+  direcciones https://cdn.jsdelivr.net/... al inicio de js\cargador.js por "js/three.min.js" y "js/OrbitControls.js":
+    https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js
+    https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js
+
+Subir a una plataforma:
+  Es un sitio estatico. Sube solo: index.html, css\, js\ y data\ (no hace falta herramientas\).
+  Sirve en GitHub Pages, Netlify, o cualquier servidor web de la institucion.
+
+Nubes 3D (mismo proceso para GFS, ETA y ECMWF):
+  1. CANTIDAD: nubosidad propia de cada modelo en sus capas baja, media y alta (LCDC/MCDC/HCDC o equivalente).
+  2. ALTURA Y ESPESOR dentro de cada capa: se reparte en los niveles mas humedos de esa capa
+     (11 niveles comunes: 1000 925 850 700 600 500 400 300 250 200 100 hPa; baja >=700, media 600-400, alta <=300).
+     La humedad se lleva a una definicion comun (agua sobre 0 C, hielo bajo 0 C; Buck 1981) y su perfil se evalua con
+     Sundqvist et al. (1989), HRc 80 % abajo a 65 % arriba, igual para los tres modelos.
+  3. DENSIDAD: mas opaca cuanto mas saturada y donde hay ascenso (w).
+  4. Altura real de cada nivel (geopotencial de cada modelo).
+  Controles: casillas Bajas / Medias / Altas y "Opacidad nubes altas" (35 % por defecto: los cirros son translucidos).
+  El meteograma y el recuadro del cursor muestran la nubosidad baja/media/alta propia del modelo.
+  La forma de cada nube (textura) es ilustrativa: el modelo da la cantidad y la altura, no la forma.
+
+Rendimiento:
+  Si se mueve lento, elige "Calidad grafica: Baja" en el panel. Las nubes son lo mas pesado.
+
+Requisitos para actualizar: Python 3 (D:\miniconda) y OpenGrADS en D:\OpenGrADS-2.2.
+
+SECCION SUDAMERICA (sudamerica.html)
+- Dominio 25N-60S, 150O-20O, malla de 1 grado, pasos de 6 h, 0-144 h.
+- Viento en 10 m, 850, 500 y 250 hPa; mismas variables que el visor regional.
+- Datos: GFS de Datos\00\GFS\27.5Km (cubre 144O-6O: la franja 150O-144O queda sin GFS).
+- Actualizar: herramientas\actualizar_sudamerica.bat (despues de bajar la corrida GFS).
+- ECMWF: datos abiertos del ECMWF (CC BY 4.0), con herramientas\ecmwf_abierto.py. Usa el entorno
+  D:\miniconda\envs\grib (Python 3.11 + ecCodes). Si hubiera que reinstalarlo:
+  D:\miniconda\Scripts\conda.exe create -n grib --override-channels -c conda-forge python=3.11 python-eccodes numpy -y
+- El ETA no cubre este dominio.
+- Isolineas: presion a nivel del mar y altura de 500 hPa (seccion Isolineas del panel).

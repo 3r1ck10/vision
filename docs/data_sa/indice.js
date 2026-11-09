@@ -1,0 +1,1 @@
+window.INDICE=[{"f": "dem.js", "b": 56380, "t": "relieve"}, {"f": "puntos.js", "b": 1165, "t": "puntos"}, {"f": "limites.js", "b": 153315, "t": "límites"}, {"f": "satelite.js", "b": 234702, "t": "imagen satelital"}, {"f": "gfs.js", "b": 9546214, "t": "GFS"}, {"f": "ecmwf.js", "b": 9132612, "t": "ECMWF"}];
