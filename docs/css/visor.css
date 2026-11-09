@@ -125,7 +125,19 @@ details.plegable[open] summary::before{transform:rotate(90deg)}
 #loading .ldrow{display:flex;justify-content:space-between;gap:12px;font-size:12px}
 @media (prefers-reduced-motion:reduce){#loading .bar i{transition:none}}
 
+/* barra de navegación: ocultar opciones, girar/mover con un dedo, acercar/alejar, vista inicial */
+#nav{right:max(12px,env(safe-area-inset-right,0px));top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:4px;padding:5px}
+body.conPunto #nav{right:calc(444px + env(safe-area-inset-right,0px))}
+#nav button{font:inherit;font-size:12px;min-width:44px;height:44px;padding:0 8px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;touch-action:manipulation}
+#nav button b{font-size:19px;font-weight:400;line-height:1}
+#nav button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:700}
+#nav .t{display:none}
+body.sinPanel #layers{display:none}
 @media (max-width:760px){
+  #nav{top:calc(12px + env(safe-area-inset-top,0px));transform:none;flex-direction:row}
+  body.conPunto #nav{right:max(12px,env(safe-area-inset-right,0px))}
+  #nav .t{display:inline}
+  #layers{top:calc(72px + env(safe-area-inset-top,0px))}
   #layers{width:auto;right:max(12px,env(safe-area-inset-right,0px));max-height:34vh}
   #point{left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));width:auto;top:auto;bottom:calc(120px + env(safe-area-inset-bottom,0px));max-height:46vh}
   #clock{min-width:0;font-size:18px}

@@ -103,6 +103,33 @@ controls.mouseButtons = {LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGH
 controls.screenSpacePanning = false;        // desplaza sobre el plano del terreno, no hacia arriba/abajo
 controls.panSpeed = 1.2; controls.keyPanSpeed = 25;
 controls.listenToKeyEvents(window);
+// Barra de navegación (pensada para celular: sin clic derecho ni rueda)
+{
+  // pantalla vertical (celular): la cámara empieza más lejos para que entre todo el ancho del dominio
+  if (innerWidth < innerHeight) camera.position.sub(controls.target).multiplyScalar(Math.min(1.45, 0.7 * innerHeight / innerWidth)).add(controls.target);
+  const CAM0 = camera.position.clone(), TGT0 = controls.target.clone();
+  let mover = false;
+  const aplicaModo = () => {
+    // un dedo / clic izquierdo: girar o mover; dos dedos: pellizcar para acercar y además mover (o girar en modo mover)
+    controls.touches = {ONE: mover ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE, TWO: mover ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN};
+    controls.mouseButtons = {LEFT: mover ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: mover ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN};
+    $("bModo").setAttribute("aria-pressed", mover); $("bModoT").textContent = mover ? "Mover ✓" : "Mover";
+    $("bModo").title = mover ? "Un dedo mueve el mapa (toca para volver a girar)" : "Un dedo gira el mapa (toca para mover)";
+  };
+  const aplicaPanel = vis => { document.body.classList.toggle("sinPanel", !vis); $("bPanel").setAttribute("aria-pressed", vis); try { localStorage.setItem("panelVis", vis ? "1" : "0"); } catch (e) {} };
+  const zoom = f => {                          // acerca (f < 1) o aleja (f > 1) hacia el centro de la vista
+    const off = camera.position.clone().sub(controls.target);
+    const d = Math.max(controls.minDistance, Math.min(controls.maxDistance, off.length() * f));
+    camera.position.copy(controls.target).add(off.setLength(d)); controls.update();
+  };
+  $("bModo").onclick = () => { mover = !mover; aplicaModo(); };
+  $("bPanel").onclick = () => aplicaPanel(document.body.classList.contains("sinPanel"));
+  $("bZin").onclick = () => zoom(0.75); $("bZout").onclick = () => zoom(1 / 0.75);
+  $("bHome").onclick = () => { camera.position.copy(CAM0); controls.target.copy(TGT0); controls.update(); };
+  let pv = null; try { pv = localStorage.getItem("panelVis"); } catch (e) {}
+  aplicaPanel(pv === null ? innerWidth > 760 : pv === "1");    // en celular empieza con el panel oculto
+  aplicaModo();
+}
 {
   const el = renderer.domElement;
   el.style.cursor = "grab";
@@ -1271,6 +1298,7 @@ function frame(now) {
   isoOn.niv = (humVar === "ta" || humVar === "qa") && humLevel !== "off";   // con advección: isolíneas del campo advectado
   updateTerrainColors(); updateSun(); updateHum(); updateRain(dt); updateWind(dt); updateIso();
   const [a, b] = fmtTime(hours); $("clock").innerHTML = `${a}<small>${b}</small>`;
+  document.body.classList.toggle("conPunto", !$("point").hidden);   // la barra de navegación se corre si la ficha está abierta
   controls.update(); renderer.render(scene, camera); updateLabels();
   if (selected && (meteoTick += dt) > 0.2) { meteoTick = 0; drawMeteo(); }
   requestAnimationFrame(frame);
