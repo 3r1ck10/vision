@@ -92,12 +92,14 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 renderer.setSize(innerWidth, innerHeight);
 $("scene").appendChild(renderer.domElement);
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x0b1118, 900, 2200);
-const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 5, 5000);   // near 5: más precisión de profundidad
+// niebla solo en el horizonte lejano (mar exterior): el dominio nunca se opaca, ni con la cámara en su distancia máxima
+scene.fog = new THREE.Fog(0x0b1118, 4500, 7500);
+let DOM_W = 600, DOM_D = 600;                // ancho y fondo del dominio en la escena (se fijan al armar el relieve)
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 5, 9000);   // near 5: más precisión de profundidad
 camera.position.set(-260, 420, 520);
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 10, 0); controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.49;
-controls.minDistance = 40; controls.maxDistance = 1600;
+controls.minDistance = 40; controls.maxDistance = 3000;
 // izquierdo: girar · medio y derecho: desplazar como una mano sobre el mapa · rueda: acercar · flechas: desplazar
 controls.mouseButtons = {LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN};
 controls.screenSpacePanning = false;        // desplaza sobre el plano del terreno, no hacia arriba/abajo
@@ -108,8 +110,14 @@ controls.listenToKeyEvents(window);
   // pantalla vertical (celular): la cámara empieza más lejos para que entre todo el ancho del dominio
   if (innerWidth < innerHeight) camera.position.sub(controls.target).multiplyScalar(Math.min(1.45, 0.7 * innerHeight / innerWidth)).add(controls.target);
   const CAM0 = camera.position.clone(), TGT0 = controls.target.clone();
-  let mover = false;
+  let mover = false, plano = false, cam3d = null;
   const aplicaModo = () => {
+    if (plano) {                               // planta: un dedo / clic izquierdo mueve, dos dedos acercan y mueven; sin giro
+      controls.touches = {ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN};
+      controls.mouseButtons = {LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN};
+      $("bModo").disabled = true; $("bModo").style.opacity = .35; return;
+    }
+    $("bModo").disabled = false; $("bModo").style.opacity = "";
     // un dedo / clic izquierdo: girar o mover; dos dedos: pellizcar para acercar y además mover (o girar en modo mover)
     controls.touches = {ONE: mover ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE, TWO: mover ? THREE.TOUCH.DOLLY_ROTATE : THREE.TOUCH.DOLLY_PAN};
     controls.mouseButtons = {LEFT: mover ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: mover ? THREE.MOUSE.ROTATE : THREE.MOUSE.PAN};
@@ -122,10 +130,44 @@ controls.listenToKeyEvents(window);
     const d = Math.max(controls.minDistance, Math.min(controls.maxDistance, off.length() * f));
     camera.position.copy(controls.target).add(off.setLength(d)); controls.update();
   };
+  // vista en planta: cámara vertical sobre el centro del dominio, norte arriba, encuadrando todo el dominio
+  // encuadra el dominio en el espacio libre de la pantalla (sin el panel, la barra ni la línea de tiempo)
+  const encuadrePlano = () => {
+    const Wp = innerWidth, Hp = innerHeight; let l = 0, r = Wp, t = 0, b = Hp;
+    for (const id of ["layers", "nav", "timeline"]) {
+      const el = $(id); if (!el || el.hidden || getComputedStyle(el).display === "none") continue;
+      const q = el.getBoundingClientRect(); if (!q.width) continue;
+      if (q.width > Wp * 0.6) { if ((q.top + q.bottom) / 2 > Hp / 2) b = Math.min(b, q.top); else t = Math.max(t, q.bottom); }
+      else if ((q.left + q.right) / 2 < Wp / 2) l = Math.max(l, q.right); else r = Math.min(r, q.left);
+    }
+    l += 10; r -= 10; t += 10; b -= 10;
+    if (r - l < Wp * 0.3 || b - t < Hp * 0.3) { l = 0; r = Wp; t = 0; b = Hp; }    // si queda muy poco espacio, toda la pantalla
+    const f = Math.tan(camera.fov * Math.PI / 360);
+    const d = Math.min(controls.maxDistance, Math.max(DOM_D * Hp / (2 * f * (b - t)), DOM_W * Hp / (2 * f * (r - l))) + ZTOP);
+    const k = 2 * d * f / Hp;                  // unidades de escena por píxel en el plano del terreno
+    const cx = -((l + r) / 2 - Wp / 2) * k, cz = -((t + b) / 2 - Hp / 2) * k;   // corre el centro del dominio al centro del espacio libre
+    controls.target.set(cx, 0, cz); camera.position.set(cx, d, cz + 0.01); controls.update();
+  };
+  const aplicaPlano = on => {
+    if (on === plano) return;
+    plano = on;
+    if (on) {
+      cam3d = {p: camera.position.clone(), t: controls.target.clone()};
+      controls.minPolarAngle = 0; controls.maxPolarAngle = 0; controls.enableRotate = false; encuadrePlano();
+    } else {
+      controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI * 0.49; controls.enableRotate = true;
+      if (cam3d) { camera.position.copy(cam3d.p); controls.target.copy(cam3d.t); } controls.update();
+    }
+    $("bPlano").setAttribute("aria-pressed", on); $("bPlanoT").textContent = on ? "Volver a 3D" : "Planta";
+    $("bPlano").title = on ? "Volver a la vista 3D" : "Vista en planta (2D, norte arriba): el mapa solo se mueve y acerca, no gira";
+    aplicaModo();
+  };
+  $("bPlano").onclick = () => aplicaPlano(!plano);
+  window.vistaPlano = aplicaPlano;             // el visor abre en planta; con el enlace index.html#3d abre en 3D
   $("bModo").onclick = () => { mover = !mover; aplicaModo(); };
-  $("bPanel").onclick = () => aplicaPanel(document.body.classList.contains("sinPanel"));
+  $("bPanel").onclick = () => { aplicaPanel(document.body.classList.contains("sinPanel")); if (plano) encuadrePlano(); };
   $("bZin").onclick = () => zoom(0.75); $("bZout").onclick = () => zoom(1 / 0.75);
-  $("bHome").onclick = () => { camera.position.copy(CAM0); controls.target.copy(TGT0); controls.update(); };
+  $("bHome").onclick = () => { if (plano) return encuadrePlano(); camera.position.copy(CAM0); controls.target.copy(TGT0); controls.update(); };
   let pv = null; try { pv = localStorage.getItem("panelVis"); } catch (e) {}
   aplicaPanel(pv === null ? innerWidth > 760 : pv === "1");    // en celular empieza con el panel oculto
   aplicaModo();
@@ -171,11 +213,12 @@ function buildTerrain() {
   terrain = new THREE.Mesh(g, new THREE.MeshLambertMaterial({vertexColors: true}));
   world.add(terrain);
   // mar
-  const sea = new THREE.Mesh(new THREE.PlaneGeometry(5000, 5000), new THREE.MeshLambertMaterial({color: 0x12324a}));
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(16000, 16000), new THREE.MeshLambertMaterial({color: 0x12324a}));
   // el mar exterior va bien por debajo del terreno (que sobre el océano está a 0 m) para que no se peleen por la profundidad
   sea.rotation.x = -Math.PI / 2; sea.position.y = -0.4; world.add(sea);
   // borde del dominio
   const W = toX(DEM.lons[nx-1]) - toX(DEM.lons[0]), D = toZ(DEM.lats[0]) - toZ(DEM.lats[ny-1]);
+  DOM_W = W; DOM_D = D;
   const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(W, ZTOP, D)), new THREE.LineBasicMaterial({color: 0x2b3b4c, transparent: true, opacity: .45}));
   edge.position.y = ZTOP / 2; world.add(edge);
   // mapa de alturas para las nubes
@@ -1417,6 +1460,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     $("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "❚❚" : "▶"; $("play").setAttribute("aria-label", playing ? "Pausar" : "Reproducir"); };
     const nowH = (Date.now() - T0) / 3.6e6; setHours(nowH > 0 && nowH < SPAN ? nowH : 30);
     modelNote(); drawLegend(); buildDays();
+    if (location.hash !== "#3d") vistaPlano(true);      // empieza en planta (2D); con index.html#3d empieza en 3D
     $("loading").hidden = true;
     requestAnimationFrame(frame);
   } catch (err) {
