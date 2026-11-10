@@ -264,6 +264,8 @@ const hypso = ramp([[0,hx("#c9b98f")],[150,hx("#b8a77a")],[400,hx("#5f7f4a")],[1
 const PAL = {
   temperatura: {f: ramp([[-4,hx("#5b3fa3")],[2,hx("#3f6fd8")],[8,hx("#38b3d9")],[14,hx("#4cc38a")],[20,hx("#d8d64a")],[26,hx("#f29b38")],[32,hx("#e2452d")],[38,hx("#9c1430")]]), min:-4, max:38, ticks:[-4,5,14,23,32,38], unit:"°C", title:"Temperatura 2 m (corregida por altitud)"},
   lluvia: {f: ramp([[0,[0,0,0]],[0.2,hx("#9cc9f5")],[1,hx("#5aa8ff")],[3,hx("#2f6fe0")],[8,hx("#5b3fd0")],[15,hx("#c040c8")],[30,hx("#ff5aa0")]]), min:0, max:30, ticks:[0,1,3,8,15,30], unit:"mm/3h", title:"Lluvia en 3 h", log:true},
+  // agua precipitable: vapor de toda la columna (mm). Selva húmeda 50–65 mm; sierra 10–25; costa seca < 25
+  pwat: {f: ramp([[0,hx("#7a4a1e")],[15,hx("#c9a35e")],[25,hx("#e8e2b0")],[35,hx("#8fd18a")],[45,hx("#2fa36b")],[55,hx("#2a78c8")],[65,hx("#5a35b8")],[75,hx("#b03aa8")]]), min:0, max:75, ticks:[0,15,25,35,45,55,65,75], unit:"mm", title:"Agua precipitable (vapor de toda la columna)"},
   cape: {f: ramp([[0,[0,0,0]],[100,hx("#3a6b4a")],[500,hx("#c8c24a")],[1000,hx("#f29b38")],[2000,hx("#e2452d")],[3000,hx("#b0108a")]]), min:0, max:3000, ticks:[0,500,1000,2000,3000], unit:"J/kg", title:"CAPE"},
   relieve: {f: hypso, min:0, max:5200, ticks:[0,1000,2000,3000,4000,5200], unit:"m", title:"Altitud"},
   // cambio de temperatura a 2 m respecto de la misma hora del día anterior (sin ciclo diario): frentes, friajes, calentamientos
@@ -517,8 +519,48 @@ const CAMPOS = {
       nota: "rojo = advección cálida, azul = advección fría; líneas negras con valor = isotermas del nivel (°C)"},
   qa: {nombre: "Advección de humedad", unidad: "g/kg/día", escala: 1, cero: true, sinIso: true, lev: {},
       stops: ["#6b3d12", "#b07a35", "#e3c98f", "#eeeeee", "#98d3a0", "#3a9e64", "#14603f"],
-      nota: "verde = llega aire más húmedo, marrón = llega aire más seco; líneas negras con valor = relación de mezcla del nivel (g/kg)"}
+      nota: "verde = llega aire más húmedo, marrón = llega aire más seco; líneas negras con valor = relación de mezcla del nivel (g/kg)"},
+  // divergencia horizontal ∇·V (10⁻⁵ s⁻¹, calculada al cargar desde u y v del nivel). Rangos: según los datos (rangosAuto)
+  dv: {nombre: "Divergencia", unidad: "10⁻⁵ s⁻¹", escala: 1, cero: true, lev: {},
+      stops: ["#1d3f8f", "#3d7fd1", "#9cc7ee", "#eeeeee", "#f6b08a", "#e0552f", "#9c1b1b"],
+      nota: "azul = convergencia, rojo = divergencia; favorecen el ascenso la convergencia en 925–850 hPa y la divergencia en 250 hPa"}
 };
+// ∇·V = (1/(a·cosφ))·∂u/∂λ + (1/a)·∂v/∂φ − v·tanφ/a en cada nivel con viento, diferencias centradas + suavizado de ±CFG.advR puntos.
+// Se enmascara donde el nivel queda bajo el relieve del modelo (o a menos de 500 m: capa límite).
+function divergencia(m) {
+  const nx = m.lons.length, ny = m.lats.length, dl = m.lons[1] - m.lons[0], da = m.lats[1] - m.lats[0], A_T = 6.371e6;
+  const mx = m.lats.map(la => 1 / (dl * 111320 * Math.cos(la * Math.PI / 180))), my = 1 / (da * 110574);
+  const tg = m.lats.map(la => Math.tan(la * Math.PI / 180) / A_T), tmp = new Float32Array(nx * ny), R = CFG.advR, bajo = {};
+  const bajoSuelo = p => {
+    if (bajo[p]) return bajo[p];
+    const l = (m.plev || []).indexOf(+p), z = l >= 0 && m.zlev ? m.zlev[l] : null, b = new Uint8Array(nx * ny);
+    for (let k = 0; k < nx * ny; k++) { const h = m.hgt ? m.hgt[k] : 0, zz = z && z[k] != null ? z[k] : pHeight(+p) * 1000; b[k] = h != null && h > zz - 500 ? 1 : 0; }
+    return (bajo[p] = b);
+  };
+  for (const st of m.steps) for (const key of Object.keys(st)) {
+    const r = /^u(\d{3,4})$/.exec(key); if (!r) continue;
+    const p = r[1], U = st[key], V = st["v" + p]; if (!U || !V) continue;
+    const B = bajoSuelo(p);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(nx - 1, i + 1), j0 = Math.max(0, j - 1), j1 = Math.min(ny - 1, j + 1), k = j * nx + i;
+      if (B[k] || B[j * nx + i0] || B[j * nx + i1] || B[j0 * nx + i] || B[j1 * nx + i]) { tmp[k] = NaN; continue; }
+      const dux = (U[j * nx + i1] - U[j * nx + i0]) * 0.1 * mx[j] / (i1 - i0);      // 1/s
+      const dvy = (V[j1 * nx + i] - V[j0 * nx + i]) * 0.1 * my / (j1 - j0);
+      tmp[k] = (dux + dvy - V[k] * 0.1 * tg[j]) * 1e5;                               // 10⁻⁵ s⁻¹
+    }
+    const D = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      if (!(tmp[j * nx + i] === tmp[j * nx + i])) { D[j * nx + i] = NaN; continue; }
+      let s = 0, n = 0;
+      for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) {
+        const jj = j + dj, ii = i + di; if (jj < 0 || jj >= ny || ii < 0 || ii >= nx) continue;
+        const v = tmp[jj * nx + ii]; if (v === v) { s += v; n++; }
+      }
+      D[j * nx + i] = n ? s / n : NaN;
+    }
+    st["dv" + p] = D;                                                                // dv850, dv250, ...
+  }
+}
 // −V·∇T y −V·∇q en cada nivel que tenga el campo y viento, en la malla del modelo (diferencias centradas + suavizado de ±CFG.advR puntos).
 // T y q se guardan ambos en décimas (°C y g/kg): el resultado queda en °C/día o g/kg/día.
 function adveccionT(m) {
@@ -559,7 +601,7 @@ function adveccionT(m) {
 // Rangos de color de temperatura y advección según los datos (cambian mucho entre el trópico y Sudamérica)
 function rangosAuto() {
   const lindo = x => { for (const r of [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40]) if (x <= r) return r; return 50; };
-  for (const v of ["t", "ta", "qa"]) {
+  for (const v of ["t", "ta", "qa", "dv"]) {
     const C = CAMPOS[v];
     for (const p of [925, 850, 700, 500, 250]) {
       const vals = [];
@@ -626,7 +668,7 @@ function updateHum() {
 }
 function drawHumLegend() {
   const box = $("humLegend");
-  $("campoCnt").textContent = humVar === "off" || humLevel === "off" ? "" : ({q: "humedad ", w: "w ", t: "T ", ta: "adv. T ", qa: "adv. q "})[humVar] + humLevel;
+  $("campoCnt").textContent = humVar === "off" || humLevel === "off" ? "" : ({q: "humedad ", w: "w ", t: "T ", ta: "adv. T ", qa: "adv. q ", dv: "div. "})[humVar] + humLevel;
   if (humVar === "off" || humLevel === "off") { box.hidden = true; return; }
   box.hidden = false; const C = CAMPOS[humVar], [lo, hi, iso] = C.lev[humLevel], cv = $("humCv"), ctx = cv.getContext("2d");
   for (let x = 0; x < cv.width; x++) { const c = C.ramp(x / (cv.width - 1)); ctx.fillStyle = `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0})`; ctx.fillRect(x, 0, 1, cv.height); }
@@ -709,13 +751,14 @@ function updateTerrainColors() {
       V = tmpA.spd10 || (tmpA.spd10 = new Float32Array(n));
       for (let i = 0; i < n; i++) V[i] = Math.hypot(U[i], W[i]);
     }
+    else if (colorMode === "pwat") V = m.steps[0].pw ? terrainField(m, "pw", 1) : (tmpA.pwNan || (tmpA.pwNan = new Float32Array(n).fill(NaN)));
     else V = terrainField(m, "cape", 1);
-    const p = PAL[colorMode], L = p.lut, thr = colorMode === "lluvia" ? 0.2 : colorMode === "viento" ? 10 : 100;
+    const p = PAL[colorMode], L = p.lut, thr = colorMode === "lluvia" ? 0.2 : colorMode === "viento" ? 10 : colorMode === "pwat" ? -1 : 100;
     for (let i = 0; i < n; i++) {
       const b0 = base[i*3]*dim+0.03, b1 = base[i*3+1]*dim+0.04, b2 = base[i*3+2]*dim+0.05;
       const v = V[i];
       if (!(v > thr)) { terrColors[i*3]=b0; terrColors[i*3+1]=b1; terrColors[i*3+2]=b2; continue; }
-      const qi = p.idx(v), q = qi * 3, a = Math.min(1, 0.55 + 0.45 * qi / 255);
+      const qi = p.idx(v), q = qi * 3, a = colorMode === "pwat" ? 0.85 : Math.min(1, 0.55 + 0.45 * qi / 255);
       terrColors[i*3]=b0+(L[q]-b0)*a; terrColors[i*3+1]=b1+(L[q+1]-b1)*a; terrColors[i*3+2]=b2+(L[q+2]-b2)*a;
     }
   }
@@ -1499,8 +1542,11 @@ renderer.domElement.addEventListener("pointermove", ev => {
   const tav = TL.length ? TL.map(p => zMean(m, p) > g ? (v => (v > 0 ? "+" : "") + v.toFixed(1))(at("ta" + p, 1)) : "—").join(" / ") : null;
   const QAL = [850, 700, 500].filter(p => m.steps[a]["qa" + p]);
   const qav = QAL.length ? QAL.map(p => zMean(m, p) > g ? (v => (v > 0 ? "+" : "") + v.toFixed(1))(at("qa" + p, 1)) : "—").join(" / ") : null;
+  const DVL = [925, 850, 500, 250].filter(p => m.steps[a]["dv" + p]);
+  const dvs = DVL.length ? DVL.map(p => zMean(m, p) > g ? (v => v === v ? (v > 0 ? "+" : "") + v.toFixed(1) : "—")(at("dv" + p, 1)) : "—").join(" / ") : null;
+  const pwt = m.steps[a].pw ? `Agua precipitable ${at("pw", 1).toFixed(0)} mm<br>` : "";
   const om = m.steps[a].w500 ? WL.map(p => zMean(m, p) > g ? omega(at("w" + p, 1), p).toFixed(2) : "—").join(" / ") : null;
-  tip.innerHTML = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}° · ${Math.round(g * 1000)} m<br>T ${T.toFixed(1)} °C${d24 === d24 ? ` (${d24 >= 0 ? "+" : ""}${d24.toFixed(1)} en 24 h)` : ""} · lluvia ${r.toFixed(1)} mm/3h<br>Nubes baja/media/alta (${model}) ${nat}<br>${qs ? `Rel. mezcla 925/850/700/500 ${qs} g/kg<br>` : ""}${ws ? `w 850/700/500/300 ${ws} cm/s<br>ω 850/700/500/300 ${om} Pa/s<br>` : ""}${tl ? `T ${TL.join("/")} ${tl} °C<br>Advección T ${TL.join("/")} ${tav} °C/día<br>` : ""}${qav ? `Advección q ${QAL.join("/")} ${qav} g/kg/día<br>` : ""}${vtxt}<br>CAPE ${Math.round(at("cape",1))} J/kg${m.steps[a].slp ? ` · PNM ${at("slp", 0.1).toFixed(1)} hPa` : ""}${m.steps[a].z500 ? ` · Z500 ${Math.round(at("z500", 1))} m` : ""}`;
+  tip.innerHTML = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}° · ${Math.round(g * 1000)} m<br>T ${T.toFixed(1)} °C${d24 === d24 ? ` (${d24 >= 0 ? "+" : ""}${d24.toFixed(1)} en 24 h)` : ""} · lluvia ${r.toFixed(1)} mm/3h<br>Nubes baja/media/alta (${model}) ${nat}<br>${pwt}${qs ? `Rel. mezcla 925/850/700/500 ${qs} g/kg<br>` : ""}${dvs ? `Divergencia ${DVL.join("/")} ${dvs} ×10⁻⁵ s⁻¹<br>` : ""}${ws ? `w 850/700/500/300 ${ws} cm/s<br>ω 850/700/500/300 ${om} Pa/s<br>` : ""}${tl ? `T ${TL.join("/")} ${tl} °C<br>Advección T ${TL.join("/")} ${tav} °C/día<br>` : ""}${qav ? `Advección q ${QAL.join("/")} ${qav} g/kg/día<br>` : ""}${vtxt}<br>CAPE ${Math.round(at("cape",1))} J/kg${m.steps[a].slp ? ` · PNM ${at("slp", 0.1).toFixed(1)} hPa` : ""}${m.steps[a].z500 ? ` · Z500 ${Math.round(at("z500", 1))} m` : ""}`;
   tip.hidden = false; tip.style.left = Math.min(innerWidth - 270, ev.clientX + 14) + "px"; tip.style.top = (ev.clientY + 14) + "px";
 });
 renderer.domElement.addEventListener("pointerleave", () => $("tip").hidden = true);
@@ -1571,7 +1617,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     if (!MODELS[model]) model = Object.keys(MODELS)[0];
     const latest = Math.max(...Object.values(MODELS).map(m => Date.parse(m.t0.replace("Z", ":00Z"))));
     T0 = Math.floor(latest / 864e5) * 864e5;
-    for (const k in MODELS) { prepModel(MODELS[k]); adveccionT(MODELS[k]); }
+    for (const k in MODELS) { prepModel(MODELS[k]); adveccionT(MODELS[k]); divergencia(MODELS[k]); }
     rangosAuto();
     buildTerrain(); for (const k in MODELS) prepSamplers(MODELS[k]);
     initWind();
@@ -1582,7 +1628,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     seg("segModel", Object.keys(MODELS).map(k => [k, k]), () => model, v => { model = v; volKeyA = volKeyB = null; humKey = ""; modelNote(); drawHumLegend(); isoNota(); if (selected) selectPoint(selected); });   // la tabla diaria y su texto dependen del modelo
     colorMode = "lluvia";                        // al abrir: lluvia sobre el terreno (con la imagen satelital de fondo) y nubes apagadas
     if (window.DATOS.satelite) loadSatellite(window.DATOS.satelite);
-    seg("segColor", (window.DATOS.satelite ? [["natural","Natural"]] : []).concat([["relieve","Relieve"],["temperatura","Temperatura"],["dt24","ΔT 24 h"],["lluvia","Lluvia"],["viento","Viento"],["cape","CAPE"]]), () => colorMode, v => { colorMode = v; drawLegend(); });
+    seg("segColor", (window.DATOS.satelite ? [["natural","Natural"]] : []).concat([["relieve","Relieve"],["temperatura","Temperatura"],["dt24","ΔT 24 h"],["lluvia","Lluvia"],["viento","Viento"],["cape","CAPE"]]).concat(Object.values(MODELS).some(m => m.steps[0] && m.steps[0].pw) ? [["pwat","PWAT"]] : []), () => colorMode, v => { colorMode = v; drawLegend(); });
     // Avisos de viento: panel plegable (cerrado al abrir; se recuerda) y umbrales (se recuerdan en este navegador)
     $("avisoGrp").hidden = !CFG.avisos;
     $("avisoGrp").addEventListener("toggle", () => updateAvisos());
@@ -1649,7 +1695,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
       setCampoNivel(humLevel);
     };
     const hayCampo = v => Object.keys(CAMPOS[v].lev).some(p => Object.values(MODELS).some(m => campoDisponible(m, v, p)));
-    seg("segHum", [["off","No"],["q","Humedad"],["w","Viento vertical"],["t","Temperatura"],["ta","Advección T"],["qa","Advección q"]].filter(([v]) => v === "off" || hayCampo(v)), () => humVar, v => { humVar = v; humKey = ""; windKey = null; buildLevSeg(); drawHumLegend(); });
+    seg("segHum", [["off","No"],["q","Humedad"],["w","Viento vertical"],["t","Temperatura"],["ta","Advección T"],["qa","Advección q"],["dv","Divergencia"]].filter(([v]) => v === "off" || hayCampo(v)), () => humVar, v => { humVar = v; humKey = ""; windKey = null; buildLevSeg(); drawHumLegend(); });
     buildLevSeg();
     const Q = {alta: [120, 1.25], media: [80, 1], baja: [48, 0.75]};
     let quality = "media";
