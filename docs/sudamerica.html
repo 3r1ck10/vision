@@ -17,6 +17,7 @@
 
 <nav id="nav" class="ui" aria-label="Navegación">
   <button type="button" id="bPanel" aria-pressed="true" title="Mostrar u ocultar el panel de opciones"><b>☰</b><span class="t">Opciones</span></button>
+  <button type="button" id="bPron" title="Pronóstico aproximado: lo observado en las estaciones y lo que viene, calibrado" hidden><b class="d" style="font-size:12px;font-weight:700">PRON</b><span class="t">Pronóstico</span></button>
   <button type="button" id="bModo" aria-pressed="false" title="Arrastrar con un dedo (o clic izquierdo): girar o mover el mapa"><b>✥</b><span class="t" id="bModoT">Mover</span></button>
   <button type="button" id="bPlano" aria-pressed="false" title="Vista en planta (2D, norte arriba): el mapa solo se mueve y acerca, no gira"><b style="font-size:14px;font-weight:700">2D</b><span class="t" id="bPlanoT">Planta</span></button>
   <button type="button" id="bZin" title="Acercar" aria-label="Acercar"><b>+</b></button>
@@ -105,6 +106,8 @@
     <h2 id="ptName"></h2>
     <div class="sub" id="ptMeta"></div>
   </div>
+  <button type="button" class="pbtn" id="ptPron" hidden>Pronóstico aproximado: observado + calibrado →</button>
+  <div class="lbl" title="Valor instantáneo cada 3 h (ETA cada 6 h): no es la máxima ni la mínima; esas están en la tabla de abajo">Temperatura del aire a 2 m (°C), cada 3 h · una línea por modelo</div>
   <canvas id="meteo"></canvas>
   <div class="tblwrap"><table id="daily"></table></div>
   <div class="note" id="dailyNote"></div>
@@ -112,6 +115,36 @@
     <span class="lbl">Ver en internet</span>
     <div class="links" id="ptLinks"></div>
   </div>
+</aside>
+
+<aside id="pron" class="ui" hidden role="dialog" aria-modal="true" aria-labelledby="pronTit">
+  <button class="x" id="closePron" type="button" aria-label="Cerrar">✕</button>
+  <div>
+    <h2 id="pronTit">Pronóstico aproximado</h2>
+    <div class="sub" id="pronSub"></div>
+  </div>
+  <div class="seg" id="segPron"></div>
+  <section id="pronPunto" class="grp">
+    <div class="pr-top">
+      <select id="pronSitio" aria-label="Lugar"></select>
+      <span class="sub" id="pronMeta"></span>
+    </div>
+    <div class="pr-leg" id="pronLeg"></div>
+    <canvas id="pronCv"></canvas>
+    <label class="chk"><input type="checkbox" id="pronPorModelo"> Ver cada modelo (ya calibrado)</label>
+    <div class="tblwrap"><table id="pronTbl"></table></div>
+    <div class="note" id="pronNota"></div>
+  </section>
+  <section id="pronResumen" class="grp" hidden>
+    <label class="chk"><input type="checkbox" id="pronTodas"> Incluir todas las estaciones de la región</label>
+    <div class="tblwrap"><table id="pronRes"></table></div>
+    <div class="note" id="pronResNota"></div>
+  </section>
+  <section id="pronModelos" class="grp" hidden>
+    <div id="pronMejor" class="pr-mejor"></div>
+    <div class="tblwrap"><table id="pronRank"></table></div>
+    <div class="note" id="pronRankNota"></div>
+  </section>
 </aside>
 
 <div id="timeline" class="ui">

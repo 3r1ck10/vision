@@ -1142,20 +1142,35 @@ function finRafaga() {         // Open-Meteo da la ráfaga del ECMWF solo hasta 
   const d = new Date(T0 + (m.abs[last] - 5) * 3.6e6);
   return `, disponible hasta el ${DIAS[d.getUTCDay()]} ${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, "0")} h`;
 }
-function daily(ser) {      // días locales: D 06Z -> D+1 06Z  (01 h a 01 h local)
+// Días de 7 h a 7 h local (12Z a 12Z), como el reporte de las estaciones:
+// Tmín = noche que termina a las 7 h del día (00Z–12Z), Tmáx = de 7 a 19 h (12Z–00Z), lluvia = 7 h del día a 7 h del siguiente.
+function daily(ser) {
   const out = [];
   for (let d = 0; d < 6; d++) {
-    const a = d * 24 + 6, b = a + 24, date = new Date(T0 + d * 864e5);
-    const ins = ser.filter(s => s.h >= a && s.h <= b && s.t === s.t), pp = ser.filter(s => s.h > a && s.h <= b);
-    const full = ser.length && ser[0].h <= a && ser[ser.length-1].h >= b;
-    const gs = ins.map(s => s.g).filter(g => g === g);
-    out.push(ins.length ? {d, date, tx: Math.max(...ins.map(s => s.t)), tn: Math.min(...ins.map(s => s.t)), pp: pp.reduce((x, s) => x + s.pr, 0), full,
-                           wx: Math.max(...ins.map(s => s.w)), gx: gs.length ? Math.max(...gs) : NaN} : {d, date, full: false});
+    const h = d * 24, date = new Date(T0 + d * 864e5);
+    const entre = (a, b) => ser.filter(s => s.h >= a && s.h <= b && s.t === s.t);
+    const noche = entre(h, h + 12), dia = entre(h + 12, h + 24), dia24 = entre(h + 12, h + 36);
+    const pp = ser.filter(s => s.h > h + 12 && s.h <= h + 36);
+    const full = ser.length && ser[0].h <= h && ser[ser.length-1].h >= h + 36;
+    const gs = dia24.map(s => s.g).filter(g => g === g);
+    const nubs = dia.map(s => 100 * (1 - (1 - (s.l || 0) / 100) * (1 - (s.mm || 0) / 100)));
+    out.push(noche.length || dia.length ? {d, date, full,
+      tx: dia.length ? Math.max(...dia.map(s => s.t)) : NaN, tn: noche.length ? Math.min(...noche.map(s => s.t)) : NaN,
+      pp: pp.length ? pp.reduce((x, s) => x + s.pr, 0) : NaN, nub: nubs.length ? nubs.reduce((a, b) => a + b, 0) / nubs.length : NaN,
+      wx: dia24.length ? Math.max(...dia24.map(s => s.w)) : NaN, gx: gs.length ? Math.max(...gs) : NaN} : {d, date, full: false});
   }
   return out;
 }
 const codigo = pp => pp < 1 ? "A" : pp < 5 ? "B" : pp <= 10 ? "C" : "D";
-const TEXTOS = {A:"Cielo nublado parcial con intervalos de brillo solar.",B:"Cielo nublado parcial a cielo nublado durante el día con tendencia a lluvia.",C:"Cielo nublado con lluvia ligera a moderada.",D:"Cielo nublado con lluvia moderada."};
+// Texto del día según la nubosidad baja+media de día (7–19 h) y la lluvia (mismos cortes que herramientas/pronostico.py)
+function frase(nub, pp) {
+  let cielo = nub !== nub || nub == null ? "Cielo" : nub < 20 ? "Cielo despejado" : nub < 45 ? "Cielo con nubes dispersas" : nub < 75 ? "Cielo nublado parcial" : "Cielo nublado";
+  if (pp !== pp || pp == null || pp < 0.3) return cielo;
+  if (cielo === "Cielo despejado" || cielo === "Cielo") cielo = "Cielo con nubes dispersas";
+  if (pp >= 5 && cielo === "Cielo con nubes dispersas") cielo = "Cielo nublado parcial";      // lluvia de 5 mm o más: al menos nublado parcial
+  return cielo + (pp < 1 ? " con lloviznas aisladas" : pp < 5 ? " con lluvia ligera" : pp < 10 ? " con lluvia ligera a moderada" : pp < 20 ? " con lluvia moderada" : " con lluvia moderada a fuerte");
+}
+const nubTxt = n => n == null || n !== n ? "—" : n < 20 ? "Despejado" : n < 45 ? "Nubes dispersas" : n < 75 ? "Nublado parcial" : "Nublado";
 
 function selectPoint(p) {
   selected = p; PUNTOS.forEach(q => q.el.classList.toggle("sel", q === p));
@@ -1165,18 +1180,21 @@ function selectPoint(p) {
   p.ser = serAll(p);
   const D = {}; for (const k in MODELS) D[k] = daily(p.ser[k]);
   const mods = Object.keys(MODELS);
-  let html = `<thead><tr><th>Día</th>${mods.map(k => `<th>${k}</th>`).join("")}<th>Texto</th></tr></thead><tbody>`;
+  const rd = v => v === v && v != null ? Math.round(v) : "—";
+  let html = `<thead><tr><th>Día</th>${mods.map(k => `<th style="color:${MCOL[k]}">${k}</th>`).join("")}<th title="Código y texto según el modelo elegido arriba">Texto ${model}</th></tr></thead><tbody>`;
   for (let i = 0; i < 6; i++) {
     const d = D[mods[0]][i].d, date = D[mods[0]][i].date;
     const cur = d >= 1 && d <= 3;
     html += `<tr><td class="${cur?"cur":""}">${DIAS[date.getUTCDay()]} ${String(date.getUTCDate()).padStart(2,"0")}</td>`;
     for (const k of mods) { const r = D[k][i];
-      html += r.tx === undefined ? `<td class="${cur?"cur":""}">—</td>` : `<td class="${cur?"cur":""}"><span class="mx">${Math.round(r.tx)}</span>/<span class="mn">${Math.round(r.tn)}</span> <span class="pp">${r.pp.toFixed(1)}</span>${r.full?"":"*"}<span class="vv${r.wx >= UMB_W || r.gx >= UMB_G ? " warn" : ""}" title="Viento medio máx. a 10 m${r.gx === r.gx ? " / ráfaga máx." : ""}">${Math.round(r.wx)}${r.gx === r.gx ? "/" + Math.round(r.gx) : ""} m/s</span></td>`; }
-    const e = D.ECMWF && D.ECMWF[i]; const c = e && e.pp !== undefined ? codigo(e.pp) : "";
-    html += `<td class="${cur?"cur":""}">${c ? `<span class="code" title="${TEXTOS[c]}">${c}</span>` : ""}</td></tr>`;
+      html += r.tx === undefined ? `<td class="${cur?"cur":""}">—</td>` : `<td class="${cur?"cur":""}"><span class="mx">${rd(r.tx)}</span>/<span class="mn">${rd(r.tn)}</span> <span class="pp">${r.pp === r.pp ? r.pp.toFixed(1) : "—"}</span>${r.full?"":"*"}<span class="vv${r.wx >= UMB_W || r.gx >= UMB_G ? " warn" : ""}" title="Viento medio máx. a 10 m${r.gx === r.gx ? " / ráfaga máx." : ""}">${rd(r.wx)}${r.gx === r.gx ? "/" + Math.round(r.gx) : ""} m/s</span></td>`; }
+    const e = D[model] && D[model][i]; const c = e && e.pp === e.pp && e.pp !== undefined ? codigo(e.pp) : "";
+    html += `<td class="${cur?"cur":""}">${c ? `<span class="code" title="${model}: ${frase(e.nub, e.pp)} (nubes bajas+medias ${Math.round(e.nub)} %, lluvia ${e.pp.toFixed(1)} mm)">${c}</span><span class="vv">${nubTxt(e.nub)}</span>` : ""}</td></tr>`;
   }
   $("daily").innerHTML = html + "</tbody>";
-  $("dailyNote").innerHTML = "Máx/Mín °C y lluvia diaria (mm), día de 01 h a 01 h local, corregido a la altitud del relieve. <b>*</b> día incompleto en ese modelo. Franjas de nubes del meteograma: nubosidad baja, media y alta propia del modelo. Texto según la lluvia del ECMWF (A seco → D lluvia moderada). Resaltados: días de la ficha. Debajo: viento medio máx. a 10 m (y ráfaga máx. en ECMWF) en m/s; <b style=\"color:#ff6b57\">rojo</b> = supera el umbral de aviso.";
+  $("dailyNote").innerHTML = `Por modelo: <span class="mx">Tmáx</span>/<span class="mn">Tmín</span> °C y <span class="pp">lluvia</span> mm del día, corregido a la altitud del relieve. <b>Día de 7 h a 7 h</b>, como las estaciones: Tmín = noche que termina a las 7 h, Tmáx = de 7 a 19 h, lluvia = de 7 h a 7 h del día siguiente. <b>*</b> día incompleto en ese modelo. <b>Texto ${model}</b>: letra según la lluvia de ese modelo (A &lt;1 mm, B 1–5, C 5–10, D &gt;10) y nubosidad baja+media de día; pasa el cursor sobre la letra para el texto completo. Cambia con el modelo elegido arriba. Debajo de cada valor: viento medio máx. a 10 m (y ráfaga máx. en ECMWF) en m/s; <b style="color:#ff6b57">rojo</b> = supera el umbral de aviso.`;
+  const sp = PRON && sitioDePunto(p);
+  $("ptPron").hidden = !sp; if (sp) $("ptPron").onclick = () => abrirPron(sp.id);
   const lat = p.lat.toFixed(3), lon = p.lon.toFixed(3);
   $("ptLinks").innerHTML = [
     ["Windy", `https://www.windy.com/${lat}/${lon}?${lat},${lon},10`],
@@ -1196,7 +1214,7 @@ function drawMeteo() {
   cv.width = W * dpr; cv.height = H * dpr; const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.clearRect(0, 0, W, H);
   const L = 30, R = W - 8, X = h => L + (h / SPAN) * (R - L);
-  const tTop = 8, tBot = 128, cTop = 150, cRow = 13, pTop = 200, pBot = 270;
+  const tTop = 8, tBot = 128, cTop = 152, cRow = 13, pTop = 206, pBot = 270;
   const all = []; for (const k in selected.ser) selected.ser[k].forEach(s => { if (s.h >= 0 && s.h <= SPAN && s.t === s.t) all.push(s.t); });
   const tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1);
   const Y = t => tBot - (t - tmin) / (tmax - tmin) * (tBot - tTop);
@@ -1221,6 +1239,9 @@ function drawMeteo() {
   c.textAlign = "left"; let lx = L + 4; for (const k in MCOL) { if (!selected.ser[k]) continue; c.fillStyle = MCOL[k]; c.fillRect(lx, tTop + 2, 10, 3); c.fillStyle = "#cfd8e1"; c.fillText(k, lx + 13, tTop + 7); lx += 13 + c.measureText(k).width + 10; }
   // franjas de nubes del modelo activo
   const ser = selected.ser[model];
+  c.textAlign = "left"; c.fillStyle = "#cfd8e1";
+  c.fillText(`Nubosidad · ${model} (más clara = más nubes)`, L + 2, cTop - 4);
+  c.fillText(`Lluvia · ${model} (mm cada 3 h)`, L + 2, pTop - 2);
   ["hh", "mm", "l"].forEach((f, r) => {
     c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText(["Alta", "Med", "Baja"][r], L - 4, cTop + r * cRow + 10);
     for (let k = 1; k < ser.length; k++) {
@@ -1243,6 +1264,197 @@ function drawMeteo() {
   c.fillText(`${cur.t.toFixed(1)}°C`, X(hours) + (hours > SPAN * 0.7 ? -4 : 4), Y(cur.t) - 4);
 }
 $("meteo").addEventListener("click", e => { const r = e.target.getBoundingClientRect(); const h = (e.clientX - r.left - 30) / (r.width - 38) * SPAN; setHours(Math.max(0, Math.min(SPAN, h))); });
+
+// ---------- Pronóstico aproximado: observado (estaciones Voz y Data) + pronóstico calibrado ----------
+// Datos de herramientas/pronostico.py (data/pronostico.js). Día de 7 h a 7 h. Por variable: si hay observado se muestra
+// el observado; si no, el consenso de los modelos calibrados. Así se ve la continuidad: primero lo medido, luego lo que viene.
+let PRON = null, pronSitio = null, pronTab = "punto";
+const fmtF = s => { const d = new Date(s + "T12:00:00Z"); return `${DIAS[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, "0")}`; };
+const ppF = v => v == null || v !== v ? "—" : v > 0 && v < 0.1 ? "T" : v.toFixed(1);
+const tF = v => v == null || v !== v ? "—" : v.toFixed(1);
+const PV = [["tn", "Tmín", "#7aa7ff"], ["tx", "Tmáx", "#ff8a4c"], ["pp", "Lluvia", "#5aa8ff"]];
+function pronValor(s, fe, i) {                  // {v, ob}: observado si existe, si no el pronóstico calibrado
+  const o = s.obs[fe]; if (o && o[i] != null) return {v: o[i], ob: true};
+  const p = s.pron[fe]; if (p && p.c[i] != null) return {v: p.c[i], ob: false, p};
+  return null;
+}
+function sitioDePunto(p) {
+  if (!PRON) return null;
+  const s = PRON.sitios.find(x => x.id === "p:" + p.nombre); if (s) return s;
+  let best = null, bd = 10;                     // punto temporal: estación a menos de 10 km
+  for (const x of PRON.sitios) { const d = 111.2 * Math.hypot(x.lat - p.lat, (x.lon - p.lon) * Math.cos(p.lat * Math.PI / 180)); if (d < bd) { bd = d; best = x; } }
+  return best;
+}
+function abrirPron(id) {
+  $("pron").hidden = false;
+  if (id) { const s = PRON.sitios.find(x => x.id === id); if (s) { pronSitio = s; $("pronSitio").value = id; } setPronTab("punto"); }
+  else setPronTab(pronTab);
+  $("closePron").focus();
+}
+function setPronTab(t) {
+  pronTab = t;
+  [["punto", "pronPunto"], ["resumen", "pronResumen"], ["modelos", "pronModelos"]].forEach(([k, id]) => $(id).hidden = k !== t);
+  seg("segPron", [["punto", "Por lugar"], ["resumen", "Resumen de tus puntos"], ["modelos", "¿Qué modelo va mejor?"]], () => pronTab, setPronTab);
+  if (t === "punto") renderPronPunto(); else if (t === "resumen") renderPronResumen(); else renderPronModelos();
+}
+function initPron(P) {
+  PRON = P;
+  const sel = $("pronSitio"), grupos = {};
+  for (const s of P.sitios) { const g = s.punto ? "Tus puntos de pronóstico" : "Estaciones · " + s.dep; (grupos[g] = grupos[g] || []).push(s); }
+  sel.innerHTML = Object.entries(grupos).map(([g, l]) => `<optgroup label="${g}">${l.map(s => `<option value="${s.id}">${s.nombre}${s.punto && s.est && s.est.toLowerCase() !== s.nombre.toLowerCase() ? " (est. " + s.est + ")" : ""}${!s.punto ? " · " + s.prov : ""}</option>`).join("")}</optgroup>`).join("");
+  pronSitio = P.sitios[0]; sel.value = pronSitio.id;
+  sel.onchange = () => { pronSitio = P.sitios.find(x => x.id === sel.value); renderPronPunto(); };
+  $("pronPorModelo").onchange = renderPronPunto; $("pronTodas").onchange = renderPronResumen;
+  $("bPron").hidden = false; $("bPron").onclick = () => abrirPron(selected ? (sitioDePunto(selected) || {}).id : null);
+  $("closePron").onclick = () => { $("pron").hidden = true; };
+  addEventListener("keydown", e => { if (e.key === "Escape" && !$("pron").hidden) $("pron").hidden = true; });
+  const cor = Object.entries(P.corridas).map(([m, d]) => m + " " + d.slice(8, 10) + "/" + d.slice(5, 7)).join(", ");
+  $("pronSub").textContent = `Observado hasta ${P.ult_obs ? fmtF(P.ult_obs) : "—"} · corridas 00Z: ${cor} · actualizado ${P.gen}`;
+  $("pronLeg").innerHTML = `<span><i style="border-color:#ff8a4c"></i>Tmáx observada</span><span><i class="dash" style="border-color:#ff8a4c"></i>Tmáx pronosticada</span>` +
+    `<span><i style="border-color:#7aa7ff"></i>Tmín observada</span><span><i class="dash" style="border-color:#7aa7ff"></i>Tmín pronosticada</span>` +
+    `<span><i class="box" style="background:#5aa8ff;border-color:#5aa8ff"></i>Lluvia observada</span><span><i class="box" style="background:rgba(90,168,255,.25);border-color:#5aa8ff"></i>Lluvia pronosticada</span>` +
+    `<span><i class="box" style="background:rgba(143,160,177,.25);border-color:transparent"></i>Rango de los modelos</span>`;
+}
+function renderPronPunto() {
+  const s = pronSitio, P = PRON; if (!s) return;
+  $("pronMeta").textContent = `${s.dep}${s.prov ? " · " + s.prov : ""} · ${s.alt} m${s.est ? " · estación " + s.est : " · sin estación cercana: se calibra con el sesgo de toda la región"}`;
+  drawPron();
+  const mods = P.modelos, verM = $("pronPorModelo").checked, iH = P.fechas.indexOf(P.hoy);
+  let h = `<thead><tr><th>Día</th><th>Tmín °C</th><th>Tmáx °C</th><th>Lluvia mm</th><th title="Nubes bajas y medias de 7 a 19 h">Nubosidad</th><th title="Proporción de modelos (pesada por su acierto) con 1 mm o más">Prob. lluvia</th>${verM ? mods.map(m => `<th style="color:${MCOL[m]}">${m}<br>mín/máx lluvia</th>`).join("") : ""}<th>Texto</th></tr></thead><tbody>`;
+  P.fechas.forEach((fe, i) => {
+    const o = s.obs[fe], p = s.pron[fe]; if (!o && !p) return;
+    const vals = PV.map((_, k) => pronValor(s, fe, k));
+    const nOb = vals.filter(v => v && v.ob).length, nPr = vals.filter(v => v && !v.ob).length;
+    const bd = nOb && nPr ? `<span class="badge mix" title="Lo ya medido es observado; el resto, pronóstico">obs+pron</span>` : nOb ? `<span class="badge ob">obs</span>` : `<span class="badge pr">pron</span>`;
+    const cel = (k, fmt) => { const v = vals[k]; if (!v) return "<td>—</td>";
+      if (v.ob) return `<td class="ob">${fmt(v.v)}</td>`;
+      const a = v.p.rng[2 * k], b = v.p.rng[2 * k + 1];
+      return `<td class="pr" title="Consenso calibrado. Rango de los modelos: ${fmt(a)} a ${fmt(b)}">${fmt(v.v)}<small>${fmt(a)}–${fmt(b)}</small></td>`; };
+    const nub = p ? p.c[3] : null, prob = p ? p.c[4] : null;
+    h += `<tr class="${fe === P.hoy ? "hoy" : ""}${i === iH && iH > 0 ? " sep" : ""}"><td>${fmtF(fe)}${fe === P.hoy ? " · hoy" : ""}${bd}</td>${cel(0, tF)}${cel(1, tF)}${cel(2, ppF)}` +
+         `<td>${nub == null ? "—" : nubTxt(nub) + `<small>${nub} %</small>`}</td><td>${prob == null ? "—" : prob + " %"}</td>`;
+    if (verM) h += mods.map(m => { const x = p && p.m[m]; return x ? `<td><span class="mn">${tF(x[0])}</span>/<span class="mx">${tF(x[1])}</span> <span class="pp">${ppF(x[2])}</span><small>sin calibrar ${tF(x[4])}/${tF(x[5])} ${ppF(x[6])}</small></td>` : "<td>—</td>"; }).join("");
+    h += `<td style="white-space:normal;min-width:150px;text-align:left">${p && nPr ? p.txt : ""}</td></tr>`;
+  });
+  $("pronTbl").innerHTML = h + "</tbody>";
+  // qué se corrige en este lugar
+  const ses = Object.entries(s.sesgo || {}).filter(([, v]) => v[2] > 0);
+  const lado = (v, n) => Math.abs(v) < 0.3 ? `${n} casi sin sesgo` : `${n} ${v > 0 ? "más cálida" : "más fría"} ${Math.abs(v).toFixed(1)} °C`;
+  $("pronNota").innerHTML = (s.mejor ? `<b>En este lugar va mejor ${s.mejor.m}</b> (error medio de Tmáx y Tmín ${s.mejor.mae} °C en ${s.mejor.n} comparaciones). ` : "") +
+    (ses.length ? "Corrección aplicada (lo que cada modelo suele errar aquí): " + ses.map(([m, v]) => `<b>${m}</b> ${lado(v[1], "Tmáx")}, ${lado(v[0], "Tmín")} (${v[2]} datos)`).join(" · ") + ". " :
+                  (s.est ? "Aún no hay días suficientes para corregir los modelos en esta estación: se usa la corrección de la región si existe. " : "")) +
+    `<br><b>Día de 7 h a 7 h</b>: Tmín = noche que termina a las 7 h; Tmáx = de 7 a 19 h; lluvia = de 7 h a 7 h del día siguiente (como la red Voz y Data). ` +
+    `<b>Negrita</b> = observado; <i>cursiva</i> = pronóstico (consenso de los modelos calibrados, con su rango debajo). T = traza. ` +
+    `Los modelos se llevan a la altitud real de la estación (6.5 °C/km) y se les resta el error medio de los últimos 30 días; la lluvia se escala según cuánto llovió de verdad frente a lo pronosticado en la región. Nubosidad = nubes bajas y medias juntas, de 7 a 19 h.`;
+}
+function drawPron() {
+  const s = pronSitio, P = PRON, cv = $("pronCv"); if (!s || $("pron").hidden || pronTab !== "punto") return;
+  const dpr = Math.min(2, devicePixelRatio), W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  const F = P.fechas, n = F.length, L = 34, R = W - 8, cw = (R - L) / n, X = i => L + cw * (i + 0.5);
+  const tTop = 16, tBot = H - 128, pTop = H - 104, pBot = H - 44, nTop = H - 36, nH = 13;
+  const iH = Math.max(0, F.indexOf(P.hoy));
+  // rango de temperatura
+  const all = [];
+  F.forEach(fe => { for (const k of [0, 1]) { const v = pronValor(s, fe, k); if (v) all.push(v.v); const p = s.pron[fe]; if (p && !(v && v.ob)) { if (p.rng[2*k] != null) all.push(p.rng[2*k], p.rng[2*k+1]); } } });
+  if (!all.length) { c.fillStyle = "#8fa0b1"; c.fillText("Sin datos para este lugar", L, 40); return; }
+  const tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1.5);
+  const Y = t => tBot - (t - tmin) / (tmax - tmin) * (tBot - tTop);
+  c.font = "10px 'IBM Plex Mono', monospace";
+  // zona de pronóstico y separador "hoy"
+  const xH = L + cw * iH;
+  c.fillStyle = "rgba(79,195,232,.06)"; c.fillRect(xH, tTop - 12, R - xH, pBot - tTop + 12);
+  c.strokeStyle = "#4fc3e8"; c.setLineDash([3, 3]); c.beginPath(); c.moveTo(xH, tTop - 12); c.lineTo(xH, pBot); c.stroke(); c.setLineDash([]);
+  c.fillStyle = "#7be0a8"; c.textAlign = "right"; c.fillText("← observado", xH - 4, tTop - 4);
+  c.fillStyle = "#4fc3e8"; c.textAlign = "left"; c.fillText("pronóstico →", xH + 4, tTop - 4);
+  // eje
+  const paso = tmax - tmin > 14 ? 5 : 2;
+  c.textAlign = "right"; c.fillStyle = "#8fa0b1";
+  for (let t = Math.ceil(tmin / paso) * paso; t <= tmax; t += paso) { c.fillText(t + "°", L - 4, Y(t) + 3); c.strokeStyle = "rgba(143,160,177,0.12)"; c.beginPath(); c.moveTo(L, Y(t)); c.lineTo(R, Y(t)); c.stroke(); }
+  // temperaturas: rango de los modelos, línea (continua = observado, a trazos = pronóstico) y valores
+  for (const [k, col, arriba] of [[1, "#ff8a4c", true], [0, "#7aa7ff", false]]) {
+    c.fillStyle = k ? "rgba(255,138,76,.16)" : "rgba(122,167,255,.16)";
+    const band = F.map((fe, i) => { const p = s.pron[fe], v = pronValor(s, fe, k); return p && v && !v.ob && p.rng[2*k] != null ? [X(i), Y(p.rng[2*k]), Y(p.rng[2*k+1])] : null; });
+    for (let i = 0; i < n; i++) if (band[i]) { const a = band[i], b = band[i + 1];
+      if (b) { c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.lineTo(b[0], b[2]); c.lineTo(a[0], a[2]); c.closePath(); c.fill(); }
+      else c.fillRect(a[0] - 3, a[2], 6, a[1] - a[2]); }
+    const pts = F.map((fe, i) => { const v = pronValor(s, fe, k); return v ? {x: X(i), y: Y(v.v), v: v.v, ob: v.ob} : null; });
+    c.strokeStyle = col; c.lineWidth = 2;
+    for (let i = 0; i < n - 1; i++) { const a = pts[i], b = pts[i + 1]; if (!a || !b) continue;
+      c.setLineDash(a.ob && b.ob ? [] : [5, 4]); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+    c.setLineDash([]);
+    pts.forEach(p => { if (!p) return;
+      c.beginPath(); c.arc(p.x, p.y, 3.5, 0, 7); if (p.ob) { c.fillStyle = col; c.fill(); } else { c.fillStyle = "#0e161f"; c.fill(); c.lineWidth = 1.6; c.stroke(); }
+      if (cw > 26) { c.fillStyle = p.ob ? "#e3eaf1" : col; c.textAlign = "center"; c.fillText(p.v.toFixed(cw > 40 ? 1 : 0), p.x, arriba ? p.y - 7 : p.y + 14); } });
+  }
+  // lluvia
+  const pv = F.map((fe, i) => pronValor(s, fe, 2));
+  const pm = Math.max(5, ...pv.filter(Boolean).map(v => v.v), ...F.map(fe => s.pron[fe] && s.pron[fe].rng[5] || 0));
+  const YP = v => pBot - Math.min(1, v / pm) * (pBot - pTop);
+  c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText(Math.round(pm) + "", L - 4, pTop + 8); c.fillText("mm", L - 4, pTop + 20);
+  c.textAlign = "left"; c.fillStyle = "#cfd8e1"; c.fillText("Lluvia del día (7 h a 7 h)", L + 2, pTop - 6);
+  pv.forEach((v, i) => { if (!v) return;
+    const x = X(i) - cw * 0.28, w = cw * 0.56, y = YP(v.v);
+    const p = s.pron[F[i]];
+    if (!v.ob && p && p.rng[5] != null) { c.strokeStyle = "rgba(143,160,177,.6)"; c.beginPath(); c.moveTo(X(i), YP(p.rng[4])); c.lineTo(X(i), YP(p.rng[5])); c.stroke(); }
+    if (v.ob) { c.fillStyle = "#5aa8ff"; c.fillRect(x, y, w, pBot - y); }
+    else { c.fillStyle = "rgba(90,168,255,.25)"; c.fillRect(x, y, w, pBot - y); c.strokeStyle = "#5aa8ff"; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, pBot - y - 1); }
+    if (cw > 24 && (v.v >= 0.05)) { c.fillStyle = v.ob ? "#e3eaf1" : "#9ccaff"; c.textAlign = "center"; c.fillText(ppF(v.v), X(i), y - 3); }
+  });
+  c.strokeStyle = "#253342"; c.beginPath(); c.moveTo(L, pBot); c.lineTo(R, pBot); c.stroke();
+  // nubosidad baja+media (solo pronóstico)
+  c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText("Nub.", L - 4, nTop + 10);
+  F.forEach((fe, i) => { const p = s.pron[fe]; if (!p || p.c[3] == null) return;
+    const v = p.c[3] / 100; c.fillStyle = `rgba(230,236,242,${0.06 + 0.85 * v})`; c.fillRect(L + cw * i + 1, nTop, cw - 2, nH);
+    if (cw > 30) { c.fillStyle = v > 0.5 ? "#0b1118" : "#e3eaf1"; c.textAlign = "center"; c.fillText(p.c[3] + "%", X(i), nTop + 10); } });
+  // días
+  F.forEach((fe, i) => { c.fillStyle = fe === P.hoy ? "#4fc3e8" : "#8fa0b1"; c.textAlign = "center";
+    const t = fmtF(fe); c.fillText(cw > 38 ? t : t.slice(-2), X(i), H - 8); });
+}
+function renderPronResumen() {
+  const P = PRON, todas = $("pronTodas").checked, iH = Math.max(0, P.fechas.indexOf(P.hoy));
+  const ayer = P.fechas[iH - 1], dias = P.fechas.slice(iH, iH + 4);
+  const lista = P.sitios.filter(s => todas || s.punto);
+  const cel = (s, fe) => {
+    const v = PV.map((_, k) => pronValor(s, fe, k)), p = s.pron[fe];
+    if (!v.some(Boolean)) return "<td>—</td>";
+    const f = (x, fmt, cls) => x ? `<span class="${cls}"${x.ob ? ' style="font-weight:700;font-style:normal"' : ' style="font-style:italic"'}>${fmt(x.v)}</span>` : "—";
+    return `<td title="${p ? p.txt : "observado"}">${f(v[1], x => Math.round(x), "mx")}/${f(v[0], x => Math.round(x), "mn")} ${f(v[2], ppF, "pp")}<small>${p && p.c[3] != null ? nubTxt(p.c[3]) : "obs"}${p && p.c[4] != null ? " · " + p.c[4] + "% lluvia" : ""}</small></td>`;
+  };
+  let h = `<thead><tr><th>Lugar</th>${ayer ? `<th>${fmtF(ayer)}<br>ayer</th>` : ""}${dias.map(fe => `<th>${fmtF(fe)}${fe === P.hoy ? "<br>hoy" : ""}</th>`).join("")}</tr></thead><tbody>`;
+  for (const s of lista) h += `<tr data-id="${s.id}"><td>${s.nombre}<small>${s.alt} m${s.mejor ? " · mejor " + s.mejor.m : ""}</small></td>${ayer ? cel(s, ayer) : ""}${dias.map(fe => cel(s, fe)).join("")}</tr>`;
+  $("pronRes").innerHTML = h + "</tbody>";
+  $("pronRes").querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => { pronSitio = P.sitios.find(x => x.id === tr.dataset.id); $("pronSitio").value = pronSitio.id; setPronTab("punto"); });
+  $("pronResNota").innerHTML = `<span class="mx">Tmáx</span>/<span class="mn">Tmín</span> °C y <span class="pp">lluvia</span> mm; <b>negrita</b> = observado, <i>cursiva</i> = pronóstico calibrado. Debajo: nubosidad baja+media de día y probabilidad de lluvia (≥1 mm). Clic en una fila para ver el detalle.`;
+}
+function renderPronModelos() {
+  const P = PRON, R = P.rank || {}, mods = P.modelos;
+  const mejor = (v, campo = "mae_cal", mayor = false) => {
+    const c = mods.filter(m => R[v] && R[v][m] && R[v][m].n >= 20);
+    if (c.length < 2) return null;
+    return c.reduce((a, b) => (mayor ? R[v][b][campo] > R[v][a][campo] : R[v][b][campo] < R[v][a][campo]) ? b : a);
+  };
+  const tarj = (tit, v, unid) => { const m = mejor(v); if (!m) return `<div><span>${tit}</span><b>—</b><span>faltan días para comparar</span></div>`;
+    const x = R[v][m]; return `<div><span>${tit}: va mejor</span><b style="color:${MCOL[m]}">${m}</b><span>error medio ${x.mae_cal} ${unid} (${x.n} comparaciones)</span></div>`; };
+  $("pronMejor").innerHTML = tarj("Tmáx", "tx", "°C") + tarj("Tmín", "tn", "°C") + tarj("Lluvia", "pp", "mm");
+  const best = {tx: mejor("tx"), tn: mejor("tn"), pp: mejor("pp"), ac: mejor("pp", "acierto", true)};
+  const cel = (v, m, fmt) => { const x = R[v] && R[v][m]; if (!x) return "<td>—</td><td>—</td>";
+    return `<td class="${best[v] === m ? "best" : ""}">${x.mae_cal.toFixed(1)}<small>sin calibrar ${x.mae.toFixed(1)}</small></td><td>${fmt(x)}</td>`; };
+  const sg = x => (x.sesgo > 0 ? "+" : "") + x.sesgo.toFixed(1);
+  let h = `<thead><tr><th>Modelo</th><th>Tmáx error °C</th><th>Tmáx sesgo</th><th>Tmín error °C</th><th>Tmín sesgo</th><th>Lluvia error mm</th><th title="Días bien clasificados como con lluvia (≥1 mm) o sin lluvia">Acierto lluvia sí/no</th><th>Peso en el consenso (Tmáx/Tmín/lluvia)</th></tr></thead><tbody>`;
+  for (const m of mods) {
+    const pp = R.pp && R.pp[m];
+    h += `<tr><td style="color:${MCOL[m]};font-weight:700">${m}</td>${cel("tx", m, sg)}${cel("tn", m, sg)}` +
+         (pp ? `<td class="${best.pp === m ? "best" : ""}">${pp.mae_cal.toFixed(1)}<small>sin calibrar ${pp.mae.toFixed(1)}</small></td><td class="${best.ac === m ? "best" : ""}">${pp.acierto} %<small>llovió ${Math.round(pp.obs)} / modelo ${Math.round(pp.mod)} mm</small></td>` : "<td>—</td><td>—</td>") +
+         `<td>${["tx", "tn", "pp"].map(v => { const w = P.pesos[v] || {}, tot = Object.values(w).reduce((a, b) => a + b, 0); return tot ? Math.round(100 * (w[m] || 0) / tot) + "%" : "—"; }).join(" / ")}</td></tr>`;
+  }
+  $("pronRank").innerHTML = h + "</tbody>";
+  const vf = P.verif;
+  $("pronRankNota").innerHTML = (vf ? `Comparado con las estaciones de la región entre el ${fmtF(vf[0])} y el ${fmtF(vf[1])} (${vf[2]} días con datos), plazos de 0 a 5 días. ` : "Aún no hay días para comparar. ") +
+    `<b>Error</b> = diferencia media absoluta con lo observado (más bajo es mejor); en grande, después de calibrar; debajo, el modelo tal cual (ya llevado a la altitud de la estación). ` +
+    `<b>Sesgo</b> = si el modelo sale más cálido (+) o más frío (−) en promedio. Cada día que se agregan observados la comparación se vuelve más confiable; con menos de una semana tómalo como indicativo. ` +
+    `Un modelo solo aparece como «mejor» cuando hay al menos dos con 20 comparaciones o más.`;
+}
 
 // ---------- Tooltip (lectura bajo el cursor) ----------
 const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(); let lastHover = 0;
@@ -1364,9 +1576,10 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     buildTerrain(); for (const k in MODELS) prepSamplers(MODELS[k]);
     initWind();
     PUNTOS = p; PUNTOS.forEach(addPin);
+    if (window.DATOS.pronostico && window.DATOS.pronostico.sitios && window.DATOS.pronostico.sitios.length) initPron(window.DATOS.pronostico);
     if (window.DATOS.limites) { buildLimites(window.DATOS.limites); $("cLim").onchange = e => setLimites(e.target.checked); }
     else $("limRow").hidden = true;
-    seg("segModel", Object.keys(MODELS).map(k => [k, k]), () => model, v => { model = v; volKeyA = volKeyB = null; humKey = ""; modelNote(); drawHumLegend(); isoNota(); if (selected) drawMeteo(); });
+    seg("segModel", Object.keys(MODELS).map(k => [k, k]), () => model, v => { model = v; volKeyA = volKeyB = null; humKey = ""; modelNote(); drawHumLegend(); isoNota(); if (selected) selectPoint(selected); });   // la tabla diaria y su texto dependen del modelo
     colorMode = "lluvia";                        // al abrir: lluvia sobre el terreno (con la imagen satelital de fondo) y nubes apagadas
     if (window.DATOS.satelite) loadSatellite(window.DATOS.satelite);
     seg("segColor", (window.DATOS.satelite ? [["natural","Natural"]] : []).concat([["relieve","Relieve"],["temperatura","Temperatura"],["dt24","ΔT 24 h"],["lluvia","Lluvia"],["viento","Viento"],["cape","CAPE"]]), () => colorMode, v => { colorMode = v; drawLegend(); });
@@ -1468,4 +1681,4 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     console.error(err);
   }
 })();
-addEventListener("resize", () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); if (selected) drawMeteo(); });
+addEventListener("resize", () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); if (selected) drawMeteo(); if (PRON) drawPron(); });
