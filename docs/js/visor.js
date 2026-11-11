@@ -1409,20 +1409,34 @@ function initPron(P) {
   pronSitio = P.sitios[0]; sel.value = pronSitio.id;
   sel.onchange = () => { pronSitio = P.sitios.find(x => x.id === sel.value); renderPronPunto(); };
   $("pronPorModelo").onchange = renderPronPunto; $("pronTodas").onchange = renderPronResumen;
+  try { if (localStorage.getItem("pronAnt") === "0") $("pronAnt").checked = false; } catch (e) {}
+  $("pronAnt").onchange = () => { try { localStorage.setItem("pronAnt", $("pronAnt").checked ? "1" : "0"); } catch (e) {} renderPronPunto(); };
+  $("pronAnt").closest("label").hidden = !Object.keys(P.anteriores || {}).length;
   $("bPron").hidden = false; $("bPron").onclick = () => abrirPron(selected ? (sitioDePunto(selected) || {}).id : null);
   $("closePron").onclick = () => { $("pron").hidden = true; };
   addEventListener("keydown", e => { if (e.key === "Escape" && !$("pron").hidden) $("pron").hidden = true; });
   const cor = Object.entries(P.corridas).map(([m, d]) => m + " " + d.slice(8, 10) + "/" + d.slice(5, 7)).join(", ");
   $("pronSub").textContent = `Observado hasta ${P.ult_obs ? fmtF(P.ult_obs) : "—"} · corridas 00Z: ${cor} · actualizado ${P.gen}`;
+}
+// corridas anteriores a mostrar (de la más nueva a la más vieja) con su color; [] si la casilla está apagada
+const ANT_COL = ["#ffd166", "#c77dff", "#7be0a8"];
+function corridasAnt(s) {
+  if (!PRON || !$("pronAnt").checked) return [];
+  return Object.keys(PRON.anteriores || {}).sort().reverse().slice(0, ANT_COL.length).map((r, i) => ({r, col: ANT_COL[i], d: (s && s.ant && s.ant[r]) || {}}));
+}
+function leyendaPron(s) {
+  const dd = r => r.slice(8, 10) + "/" + r.slice(5, 7), hace = r => Math.round((Date.parse(PRON.hoy) - Date.parse(r)) / 864e5);
   $("pronLeg").innerHTML = `<span><i style="border-color:#ff8a4c"></i>Tmáx observada</span><span><i class="dash" style="border-color:#ff8a4c"></i>Tmáx pronosticada</span>` +
     `<span><i style="border-color:#7aa7ff"></i>Tmín observada</span><span><i class="dash" style="border-color:#7aa7ff"></i>Tmín pronosticada</span>` +
     `<span><i class="box" style="background:#5aa8ff;border-color:#5aa8ff"></i>Lluvia observada</span><span><i class="box" style="background:rgba(90,168,255,.25);border-color:#5aa8ff"></i>Lluvia pronosticada</span>` +
-    `<span><i class="box" style="background:rgba(143,160,177,.25);border-color:transparent"></i>Rango de los modelos</span>`;
+    `<span><i class="box" style="background:rgba(143,160,177,.25);border-color:transparent"></i>Rango de los modelos</span>` +
+    corridasAnt(s).filter(a => Object.keys(a.d).length).map(a => `<span><i class="dash" style="border-color:${a.col}"></i>Pronóstico de la corrida del ${dd(a.r)} (hace ${hace(a.r)} día${hace(a.r) > 1 ? "s" : ""})</span>`).join("");
 }
 function renderPronPunto() {
   const s = pronSitio, P = PRON; if (!s) return;
   $("pronMeta").textContent = `${s.dep}${s.prov ? " · " + s.prov : ""} · ${s.alt} m${s.est ? " · estación " + s.est : " · sin estación cercana: se calibra con el sesgo de toda la región"}`;
-  drawPron();
+  leyendaPron(s); drawPron();
+  const ANT = corridasAnt(s), ddA = r => r.slice(8, 10) + "/" + r.slice(5, 7);
   const mods = P.modelos, verM = $("pronPorModelo").checked, iH = P.fechas.indexOf(P.hoy);
   let h = `<thead><tr><th>Día</th><th>Tmín °C</th><th>Tmáx °C</th><th>Lluvia mm</th><th title="Nubes bajas y medias de 7 a 19 h">Nubosidad</th><th title="Proporción de modelos (pesada por su acierto) con 1 mm o más">Prob. lluvia</th>${verM ? mods.map(m => `<th style="color:${MCOL[m]}">${m}<br>mín/máx lluvia</th>`).join("") : ""}<th>Texto</th></tr></thead><tbody>`;
   P.fechas.forEach((fe, i) => {
@@ -1431,7 +1445,10 @@ function renderPronPunto() {
     const nOb = vals.filter(v => v && v.ob).length, nPr = vals.filter(v => v && !v.ob).length;
     const bd = nOb && nPr ? `<span class="badge mix" title="Lo ya medido es observado; el resto, pronóstico">obs+pron</span>` : nOb ? `<span class="badge ob">obs</span>` : `<span class="badge pr">pron</span>`;
     const cel = (k, fmt) => { const v = vals[k]; if (!v) return "<td>—</td>";
-      if (v.ob) return `<td class="ob">${fmt(v.v)}</td>`;
+      if (v.ob) {                                  // observado: lo que habían pronosticado las corridas anteriores, al pasar el mouse
+        const prev = ANT.filter(a => a.d[fe] && a.d[fe][k] != null).map(a => `corrida ${ddA(a.r)}: ${fmt(a.d[fe][k])}`);
+        return `<td class="ob"${prev.length ? ` title="Pronosticado — ${prev.join(" · ")}"` : ""}>${fmt(v.v)}</td>`;
+      }
       const a = v.p.rng[2 * k], b = v.p.rng[2 * k + 1];
       return `<td class="pr" title="Consenso calibrado. Rango de los modelos: ${fmt(a)} a ${fmt(b)}">${fmt(v.v)}<small>${fmt(a)}–${fmt(b)}</small></td>`; };
     const nub = p ? p.c[3] : null, prob = p ? p.c[4] : null;
@@ -1460,7 +1477,9 @@ function drawPron() {
   const iH = Math.max(0, F.indexOf(P.hoy));
   // rango de temperatura
   const all = [];
-  F.forEach(fe => { for (const k of [0, 1]) { const v = pronValor(s, fe, k); if (v) all.push(v.v); const p = s.pron[fe]; if (p && !(v && v.ob)) { if (p.rng[2*k] != null) all.push(p.rng[2*k], p.rng[2*k+1]); } } });
+  const ANT = corridasAnt(s);
+  F.forEach(fe => { for (const k of [0, 1]) { const v = pronValor(s, fe, k); if (v) all.push(v.v); const p = s.pron[fe]; if (p && !(v && v.ob)) { if (p.rng[2*k] != null) all.push(p.rng[2*k], p.rng[2*k+1]); }
+    for (const a of ANT) if (a.d[fe] && a.d[fe][k] != null) all.push(a.d[fe][k]); } });
   if (!all.length) { c.fillStyle = "#8fa0b1"; c.fillText("Sin datos para este lugar", L, 40); return; }
   const tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1.5);
   const Y = t => tBot - (t - tmin) / (tmax - tmin) * (tBot - tTop);
@@ -1482,6 +1501,15 @@ function drawPron() {
     for (let i = 0; i < n; i++) if (band[i]) { const a = band[i], b = band[i + 1];
       if (b) { c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.lineTo(b[0], b[2]); c.lineTo(a[0], a[2]); c.closePath(); c.fill(); }
       else c.fillRect(a[0] - 3, a[2], 6, a[1] - a[2]); }
+    // corridas anteriores: línea fina a trazos de su color (debajo de la actual), con puntitos
+    for (const a of ANT) {
+      const q = F.map((fe, i) => a.d[fe] && a.d[fe][k] != null ? [X(i), Y(a.d[fe][k])] : null);
+      c.strokeStyle = a.col; c.lineWidth = 1.4; c.setLineDash([2, 3]); c.globalAlpha = 0.9;
+      for (let i = 0; i < n - 1; i++) if (q[i] && q[i + 1]) { c.beginPath(); c.moveTo(q[i][0], q[i][1]); c.lineTo(q[i + 1][0], q[i + 1][1]); c.stroke(); }
+      c.setLineDash([]); c.fillStyle = a.col;
+      q.forEach(p => { if (p) { c.beginPath(); c.arc(p[0], p[1], 2.2, 0, 7); c.fill(); } });
+      c.globalAlpha = 1;
+    }
     const pts = F.map((fe, i) => { const v = pronValor(s, fe, k); return v ? {x: X(i), y: Y(v.v), v: v.v, ob: v.ob} : null; });
     c.strokeStyle = col; c.lineWidth = 2;
     for (let i = 0; i < n - 1; i++) { const a = pts[i], b = pts[i + 1]; if (!a || !b) continue;
@@ -1493,7 +1521,8 @@ function drawPron() {
   }
   // lluvia
   const pv = F.map((fe, i) => pronValor(s, fe, 2));
-  const pm = Math.max(5, ...pv.filter(Boolean).map(v => v.v), ...F.map(fe => s.pron[fe] && s.pron[fe].rng[5] || 0));
+  const pm = Math.max(5, ...pv.filter(Boolean).map(v => v.v), ...F.map(fe => s.pron[fe] && s.pron[fe].rng[5] || 0),
+                      ...ANT.flatMap(a => F.map(fe => a.d[fe] && a.d[fe][2] || 0)));
   const YP = v => pBot - Math.min(1, v / pm) * (pBot - pTop);
   c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText(Math.round(pm) + "", L - 4, pTop + 8); c.fillText("mm", L - 4, pTop + 20);
   c.textAlign = "left"; c.fillStyle = "#cfd8e1"; c.fillText("Lluvia del día (7 h a 7 h)", L + 2, pTop - 6);
@@ -1505,6 +1534,12 @@ function drawPron() {
     else { c.fillStyle = "rgba(90,168,255,.25)"; c.fillRect(x, y, w, pBot - y); c.strokeStyle = "#5aa8ff"; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, pBot - y - 1); }
     if (cw > 24 && (v.v >= 0.05)) { c.fillStyle = v.ob ? "#e3eaf1" : "#9ccaff"; c.textAlign = "center"; c.fillText(ppF(v.v), X(i), y - 3); }
   });
+  // lluvia de las corridas anteriores: una marca horizontal de su color a la altura de lo pronosticado
+  F.forEach((fe, i) => ANT.forEach((a, j) => {
+    const v = a.d[fe] && a.d[fe][2]; if (v == null) return;
+    const w = cw * 0.7, x = X(i) - w / 2, y = Math.min(pBot - 1.5, YP(v));
+    c.strokeStyle = a.col; c.lineWidth = 2; c.setLineDash(j ? [3, 2] : []); c.beginPath(); c.moveTo(x, y); c.lineTo(x + w, y); c.stroke(); c.setLineDash([]);
+  }));
   c.strokeStyle = "#253342"; c.beginPath(); c.moveTo(L, pBot); c.lineTo(R, pBot); c.stroke();
   // nubosidad baja+media (solo pronóstico)
   c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText("Nub.", L - 4, nTop + 10);
