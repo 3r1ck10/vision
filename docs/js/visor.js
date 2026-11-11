@@ -1593,6 +1593,93 @@ function renderPronModelos() {
     `<b>Error</b> = diferencia media absoluta con lo observado (más bajo es mejor); en grande, después de calibrar; debajo, el modelo tal cual (ya llevado a la altitud de la estación). ` +
     `<b>Sesgo</b> = si el modelo sale más cálido (+) o más frío (−) en promedio. Cada día que se agregan observados la comparación se vuelve más confiable; con menos de una semana tómalo como indicativo. ` +
     `Un modelo solo aparece como «mejor» cuando hay al menos dos con 20 comparaciones o más.`;
+  renderZonas(); initMapaEst(); drawMapa(); renderEst();
+}
+
+// ---------- ¿Qué modelo va mejor? por zona, en un mapa y por estación ----------
+// verif de cada sitio y regiones: {var: {modelo: [n, error, error calibrado, sesgo, acierto lluvia %]}}; plazos 0–3 días,
+// solo días y corridas que tienen los cuatro modelos (comparación pareja)
+const ZONAS = [["costa", "Costa y vertiente occidental (< 2000 m)"], ["sierra", "Sierra (≥ 2000 m)"], ["selva", "Selva (vertiente oriental, < 2000 m)"]];
+const VNOM = {tx: ["Tmáx", "°C"], tn: ["Tmín", "°C"], pp: ["Lluvia", "mm"]};
+let mapaVar = "tx", mapaPts = [], mapaEst = null;
+const mejorDe = (vv, cal, minN = 1) => {          // modelo con menor error en {modelo: [...]}
+  let b = null; for (const [m, x] of Object.entries(vv || {})) if (x[0] >= minN && (!b || x[cal ? 2 : 1] < b[1][cal ? 2 : 1])) b = [m, x];
+  return b && Object.keys(vv).length >= 2 ? b : null;
+};
+function renderZonas() {
+  const P = PRON, mods = P.modelos, Z = P.regiones || {}, nz = P.nest_reg || {};
+  let h = `<thead><tr><th>Zona</th>${["tx", "tn", "pp"].map(v => `<th>${VNOM[v][0]}: va mejor</th>`).join("")}${mods.map(m => `<th style="color:${MCOL[m]}">${m}<br>error Tmáx / Tmín / lluvia</th>`).join("")}</tr></thead><tbody>`;
+  for (const [z, nom] of ZONAS) {
+    const zz = Z[z]; if (!zz) continue;
+    h += `<tr><td style="text-align:left">${nom}<small>${nz[z] || 0} estaciones</small></td>` +
+      ["tx", "tn", "pp"].map(v => { const b = mejorDe(zz[v], true, 10); return b ? `<td class="best" style="color:${MCOL[b[0]]}">${b[0]}<small>${b[1][2].toFixed(1)} ${VNOM[v][1]} · ${b[1][0]} casos</small></td>` : "<td>—</td>"; }).join("") +
+      mods.map(m => `<td>${["tx", "tn", "pp"].map(v => zz[v] && zz[v][m] ? zz[v][m][2].toFixed(1) : "—").join(" / ")}</td>`).join("") + "</tr>";
+  }
+  $("pronZonas").innerHTML = h + "</tbody>";
+}
+function initMapaEst() {
+  const sel = $("pronEst"); if (sel.dataset.ok) return; sel.dataset.ok = "1";
+  const est = PRON.sitios.filter(s => !s.punto && s.verif && Object.keys(s.verif).length);
+  const grupos = {}; for (const s of est) (grupos[s.dep] = grupos[s.dep] || []).push(s);
+  sel.innerHTML = Object.entries(grupos).map(([g, l]) => `<optgroup label="${g}">${l.map(s => `<option value="${s.id}">${s.nombre} · ${s.prov}</option>`).join("")}</optgroup>`).join("");
+  mapaEst = est[0] || null; if (mapaEst) sel.value = mapaEst.id;
+  sel.onchange = () => { mapaEst = PRON.sitios.find(x => x.id === sel.value); renderEst(); drawMapa(); };
+  seg("segMapaVar", [["tx", "Tmáx"], ["tn", "Tmín"], ["pp", "Lluvia"]], () => mapaVar, v => { mapaVar = v; drawMapa(); });
+  $("mapaCal").onchange = drawMapa;
+  const cv = $("pronMapa"), tip = $("mapaTip");
+  const cerca = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    let b = null, bd = 12; for (const p of mapaPts) { const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; b = p; } } return [b, x, y]; };
+  cv.onmousemove = e => { const [p, x, y] = cerca(e); if (!p) { tip.hidden = true; return; }
+    const v = p.s.verif[mapaVar] || {}, cal = $("mapaCal").checked;
+    tip.innerHTML = `<b>${p.s.nombre}</b> · ${p.s.prov} · ${p.s.alt} m<br>${VNOM[mapaVar][0]}, error ${cal ? "calibrado" : "sin calibrar"} (${v[Object.keys(v)[0]] ? v[Object.keys(v)[0]][0] : 0} casos):<br>` +
+      PRON.modelos.map(m => v[m] ? `<span style="color:${MCOL[m]}">${m}</span> ${v[m][cal ? 2 : 1].toFixed(1)} ${VNOM[mapaVar][1]}` : "").filter(Boolean).join(" · ");
+    tip.hidden = false; tip.style.left = Math.min(x + 14, cv.clientWidth - tip.offsetWidth - 4) + "px"; tip.style.top = (y + 14) + "px"; };
+  cv.onmouseleave = () => tip.hidden = true;
+  cv.onclick = e => { const [p] = cerca(e); if (!p) return; mapaEst = p.s; sel.value = p.s.id; renderEst(); drawMapa(); };
+}
+function drawMapa() {
+  const cv = $("pronMapa"); if (!cv || $("pron").hidden || pronTab !== "modelos") return;
+  const dpr = Math.min(2, devicePixelRatio), W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+  const est = PRON.sitios.filter(s => !s.punto && s.verif && s.verif[mapaVar]), cal = $("mapaCal").checked;
+  // encuadre: el dominio del visor, con el ancho corregido por la latitud
+  const lo0 = DEM.lons[0], lo1 = DEM.lons[DEM.lons.length - 1], la0 = DEM.lats[0], la1 = DEM.lats[DEM.lats.length - 1];
+  const kx = Math.cos((la0 + la1) / 2 * Math.PI / 180), sc = Math.min((W - 20) / ((lo1 - lo0) * kx), (H - 20) / (la1 - la0));
+  const ox = (W - (lo1 - lo0) * kx * sc) / 2, oy = (H - (la1 - la0) * sc) / 2;
+  const PX = lo => ox + (lo - lo0) * kx * sc, PY = la => oy + (la1 - la) * sc;
+  const L = window.DATOS && window.DATOS.limites;
+  if (L) { c.strokeStyle = "rgba(200,210,220,.35)"; c.lineWidth = 1;
+    for (const ln of L.lineas) { c.beginPath(); for (let k = 0; k + 1 < ln.length; k += 2) { const x = PX(ln[k]), y = PY(ln[k + 1]); k ? c.lineTo(x, y) : c.moveTo(x, y); } c.stroke(); }
+    c.fillStyle = "rgba(200,210,220,.45)"; c.font = "10px 'IBM Plex Mono', monospace"; c.textAlign = "center";
+    for (const [n, lo, la] of L.nombres) c.fillText(n.toUpperCase(), PX(lo), PY(la)); }
+  mapaPts = []; const cuenta = {};
+  for (const s of est) {
+    const b = mejorDe(s.verif[mapaVar], cal); if (!b) continue;
+    const x = PX(s.lon), y = PY(s.lat), r = 4 + Math.min(4, b[1][0] / 3);
+    cuenta[b[0]] = (cuenta[b[0]] || 0) + 1;
+    c.beginPath(); c.arc(x, y, r, 0, 7); c.fillStyle = MCOL[b[0]]; c.fill();
+    c.lineWidth = mapaEst && mapaEst.id === s.id ? 3 : 1; c.strokeStyle = mapaEst && mapaEst.id === s.id ? "#fff" : "rgba(0,0,0,.6)"; c.stroke();
+    mapaPts.push({x, y, s});
+  }
+  $("mapaLeg").innerHTML = PRON.modelos.map(m => `<span><i class="box" style="background:${MCOL[m]};border-color:${MCOL[m]};border-radius:50%;width:10px;height:10px"></i>${m}: mejor en ${cuenta[m] || 0} estaciones</span>`).join("") +
+    `<span>Color = modelo con menor error de ${VNOM[mapaVar][0]} en la estación · tamaño = cantidad de casos · pasa el mouse para ver el error de cada modelo, clic para verla abajo</span>`;
+}
+function renderEst() {
+  const s = mapaEst; if (!s) { $("pronEstTbl").innerHTML = ""; return; }
+  const zn = (ZONAS.find(z => z[0] === s.reg) || [, "—"])[1];
+  $("pronEstMeta").textContent = `${s.dep} · ${s.prov} · ${s.alt} m · zona: ${zn}`;
+  const V = s.verif || {}, mods = PRON.modelos;
+  let h = `<thead><tr><th>Modelo</th>${["tx", "tn", "pp"].map(v => `<th>${VNOM[v][0]} error ${VNOM[v][1]}</th><th>${v === "pp" ? "Acierto sí/no" : "Sesgo"}</th>`).join("")}</tr></thead><tbody>`;
+  const best = {tx: mejorDe(V.tx, true), tn: mejorDe(V.tn, true), pp: mejorDe(V.pp, true)};
+  for (const m of mods) {
+    h += `<tr><td style="color:${MCOL[m]};font-weight:700">${m}</td>` + ["tx", "tn", "pp"].map(v => { const x = V[v] && V[v][m]; if (!x) return "<td>—</td><td>—</td>";
+      return `<td class="${best[v] && best[v][0] === m ? "best" : ""}">${x[2].toFixed(1)}<small>sin calibrar ${x[1].toFixed(1)} · ${x[0]} casos</small></td><td>${v === "pp" ? x[4] + " %" : (x[3] > 0 ? "+" : "") + x[3].toFixed(1)}</td>`; }).join("") + "</tr>";
+  }
+  $("pronEstTbl").innerHTML = h + "</tbody>";
+  const n = Math.max(0, ...Object.values(V).flatMap(o => Object.values(o).map(x => x[0])));
+  $("pronZonaNota").innerHTML = `<b>Cómo se compara</b>: plazos de 0 a 3 días de los últimos 30 días, y solo los días y corridas que tienen los cuatro modelos, para que la comparación sea pareja. ` +
+    `<b>Error</b> = diferencia media absoluta con lo observado (más bajo es mejor). Zonas aproximadas por altitud y vertiente. ` +
+    (n < 10 ? `<b>Esta estación tiene solo ${n} casos por modelo</b>: tómalo como indicativo; con 2–3 semanas de observados el mapa y la tabla serán confiables.` : "");
 }
 
 // ---------- Tooltip (lectura bajo el cursor) ----------
