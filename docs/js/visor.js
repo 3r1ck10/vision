@@ -725,9 +725,15 @@ function dT24Terreno(m) {
   return o;
 }
 let lastTerrKey = "";
+// Con un campo en altura a la vista, el terreno va oscurecido y sin color de variable: el plano es semitransparente
+// y la lluvia de abajo o el desierto claro de la imagen satelital se transparentaban en parches blanquecinos.
 function updateTerrainColors() {
+  const campo = humMesh && humMesh.visible && colorMode !== "relieve" && colorMode !== "natural";
+  pintarTerreno(campo ? "apagado" : colorMode);
+}
+function pintarTerreno(colorMode) {                // el parámetro tapa al global: todo lo de abajo usa el modo efectivo
   const m = MODELS[model], n = terrLon.length;
-  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : hours.toFixed(2));
+  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" || colorMode === "apagado" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : hours.toFixed(2));
   if (key === lastTerrKey) return;           // nada cambió: no recalcular 49 000 vértices
   lastTerrKey = key;
   const mat = terrain.material, wantMap = colorMode === "natural" && satTex ? satTex : null;
@@ -735,6 +741,9 @@ function updateTerrainColors() {
   const base = terrSat || terrBase, dim = terrSat ? 0.62 : 0.45;
   if (colorMode === "natural") { if (satTex) terrColors.fill(1.12); else terrColors.set(terrBase); }
   else if (colorMode === "relieve") { terrColors.set(terrBase); }
+  else if (colorMode === "apagado") {              // bajo un campo en altura: relieve oscurecido, el color del plano no se aclara
+    for (let i = 0; i < n * 3; i++) terrColors[i] = base[i] * dim + 0.04;
+  }
   else if (colorMode === "dt24") {
     const D = dT24Terreno(m), p = PAL.dt24, L = p.lut, base = terrSat || terrBase, dim = terrSat ? 0.62 : 0.45;
     for (let i = 0; i < n; i++) {
@@ -1605,7 +1614,7 @@ function frame(now) {
   cloudMesh.visible = $("cClouds").checked;
   if (cloudMesh.visible) updateVolumes(m);
   isoOn.niv = (humVar === "ta" || humVar === "qa") && humLevel !== "off";   // con advección: isolíneas del campo advectado
-  isoOn.pw = colorMode === "pwat";                                          // con el color PWAT: sus isolíneas altas
+  isoOn.pw = colorMode === "pwat" && !humMesh.visible;                                        // con el color PWAT: sus isolíneas altas
   updateTerrainColors(); updateSun(); updateHum(); updateRain(dt); updateWind(dt); updateIso();
   const [a, b] = fmtTime(hours); $("clock").innerHTML = `${a}<small>${b}</small>`;
   document.body.classList.toggle("conPunto", !$("point").hidden);   // la barra de navegación se corre si la ficha está abierta
