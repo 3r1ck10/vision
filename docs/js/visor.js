@@ -1090,7 +1090,12 @@ function isoNota() {
 }
 
 // ---------- Límites departamentales ----------
-let bordes = null; const deptLabels = [];
+let bordes = null, bordesAlto = null; const deptLabels = [];
+function bordesNivel() {                           // límites encima del campo en altura, a su altura
+  if (!bordesAlto) return;
+  bordesAlto.visible = !!(bordes && bordes.visible && humMesh && humMesh.visible);
+  if (bordesAlto.visible) bordesAlto.position.y = humMesh.position.y + 0.02;
+}
 function buildLimites(L) {
   const pos = [];
   for (const line of L.lineas) {
@@ -1108,6 +1113,14 @@ function buildLimites(L) {
   const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   bordes = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xf4f0e6, transparent: true, opacity: 0.85}));
   bordes.renderOrder = 1; world.add(bordes);
+  // copia plana de los límites a la altura del campo en altura (el plano tapa los del relieve); oscuros, para no
+  // confundirlos con las isolíneas blancas. Se muestra solo con un campo activo (ver bordesNivel)
+  const plano = [];
+  for (const line of L.lineas) for (let k = 0; k + 3 < line.length; k += 2)
+    plano.push(toX(line[k]), 0, toZ(line[k+1]), toX(line[k+2]), 0, toZ(line[k+3]));
+  const g2 = new THREE.BufferGeometry(); g2.setAttribute("position", new THREE.Float32BufferAttribute(plano, 3));
+  bordesAlto = new THREE.LineSegments(g2, new THREE.LineBasicMaterial({color: 0x0c0c10, transparent: true, opacity: 0.85, depthWrite: false}));
+  bordesAlto.renderOrder = 3; bordesAlto.visible = false; world.add(bordesAlto);
   for (const [nombre, lon, lat] of L.nombres) {
     const el = document.createElement("div"); el.className = "dept"; el.textContent = nombre;
     labelsEl.appendChild(el); deptLabels.push({el, lon, lat, g: demAt(lon, lat)});
@@ -1630,7 +1643,7 @@ function frame(now) {
   if (cloudMesh.visible) updateVolumes(m);
   isoOn.niv = (humVar === "ta" || humVar === "qa") && humLevel !== "off";   // con advección: isolíneas del campo advectado
   isoOn.pw = colorMode === "pwat" && !humMesh.visible;                                        // con el color PWAT: sus isolíneas altas
-  updateTerrainColors(); updateSun(); updateHum(); updateRain(dt); updateWind(dt); updateIso();
+  updateTerrainColors(); updateSun(); updateHum(); bordesNivel(); updateRain(dt); updateWind(dt); updateIso();
   const [a, b] = fmtTime(hours); $("clock").innerHTML = `${a}<small>${b}</small>`;
   document.body.classList.toggle("conPunto", !$("point").hidden);   // la barra de navegación se corre si la ficha está abierta
   controls.update(); renderer.render(scene, camera); updateLabels();
