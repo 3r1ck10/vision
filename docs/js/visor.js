@@ -148,13 +148,24 @@ controls.listenToKeyEvents(window);
     const cx = -((l + r) / 2 - Wp / 2) * k, cz = -((t + b) / 2 - Hp / 2) * k;   // corre el centro del dominio al centro del espacio libre
     controls.target.set(cx, 0, cz); camera.position.set(cx, d, cz + 0.01); controls.update();
   };
+  // Planta con "teleobjetivo": ángulo de 8° y cámara ~5,5 veces más lejos. Con 42° lo alto (campo en altura, sus límites)
+  // se corría hacia afuera del centro respecto de lo de abajo (paralaje); así el mapa se ve igual de grande pero el
+  // corrimiento por altura es ~5,5 veces menor. Distancias, recorte y niebla se escalan con el mismo factor.
+  const FOV3D = camera.fov, FOVP = 8, KP = Math.tan(FOV3D * Math.PI / 360) / Math.tan(FOVP * Math.PI / 360);
+  const lente = on => {
+    const k = on ? KP : 1;
+    camera.fov = on ? FOVP : FOV3D; camera.near = 5 * k; camera.far = 9000 * k; camera.updateProjectionMatrix();
+    controls.minDistance = 40 * k; controls.maxDistance = 3000 * k; scene.fog.near = 4500 * k; scene.fog.far = 7500 * k;
+  };
   const aplicaPlano = on => {
     if (on === plano) return;
     plano = on;
     if (on) {
       cam3d = {p: camera.position.clone(), t: controls.target.clone()};
+      lente(true);
       controls.minPolarAngle = 0; controls.maxPolarAngle = 0; controls.enableRotate = false; encuadrePlano();
     } else {
+      lente(false);
       controls.minPolarAngle = 0; controls.maxPolarAngle = Math.PI * 0.49; controls.enableRotate = true;
       if (cam3d) { camera.position.copy(cam3d.p); controls.target.copy(cam3d.t); } controls.update();
     }
