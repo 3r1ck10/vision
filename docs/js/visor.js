@@ -622,10 +622,12 @@ for (const k in CAMPOS) CAMPOS[k].ramp = ramp(CAMPOS[k].stops.map((h, i) => [i /
 let humVar = "off", humLevel = "off", humMesh = null, humMat = null, humTex = null, humKey = "";
 const HUM = {ramp: v => CAMPOS[humVar].ramp(v)};   // usado por las partículas de viento sincronizadas
 function buildHum(W, D) {
-  humTex = new THREE.DataTexture(new Uint8Array(VNX * VNY), VNX, VNY, THREE.RedFormat, THREE.UnsignedByteType);
+  // canal R = valor (0–255 en la escala del campo), canal G = hay dato (255) o no (0): lo sin dato no se dibuja
+  humTex = new THREE.DataTexture(new Uint8Array(VNX * VNY * 2), VNX, VNY, THREE.RGFormat, THREE.UnsignedByteType);
   humTex.minFilter = humTex.magFilter = THREE.LinearFilter; humTex.needsUpdate = true;
   humMat = new THREE.ShaderMaterial({
-    uniforms: {qTex: {value: humTex}, hmap: {value: hmapTex}, hmapMax: {value: 7.0}, zKm: {value: 1.5}, vMin: {value: 0}, vMax: {value: 18}, iso: {value: 2}, opac: {value: 0.72}, isoW: {value: 0.45},
+    // opacidad alta: con 0.72 el color cambiaba según lo de abajo (más claro sobre continentes y bordes que sobre el mar)
+    uniforms: {qTex: {value: humTex}, hmap: {value: hmapTex}, hmapMax: {value: 7.0}, zKm: {value: 1.5}, vMin: {value: 0}, vMax: {value: 18}, iso: {value: 2}, opac: {value: 0.9}, isoW: {value: 0.45},
                cero: {value: 0}, pal: {value: CAMPOS.q.stops.map(h => { const c = hx(h); return new THREE.Vector3(c[0], c[1], c[2]); })}},
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
@@ -638,7 +640,9 @@ function buildHum(W, D) {
       void main(){
         float g = texture2D(hmap, vUv).r * hmapMax;
         if (g > zKm) discard;                                   // el relieve atraviesa el nivel
-        float t = texture2D(qTex, vUv).r, q = vMin + t * (vMax - vMin);   // valor en unidades del campo
+        vec2 tx = texture2D(qTex, vUv).rg;
+        if (tx.g < 0.5) discard;                                // sin dato (fuera del modelo o enmascarado)
+        float t = tx.r, q = vMin + t * (vMax - vMin);           // valor en unidades del campo
         vec3 c = paleta(t);
         float f = q / iso, line = 1.0 - smoothstep(0.0, fwidth(f) * 1.3, abs(fract(f - 0.5) - 0.5));
         c = mix(c, vec3(1.0), line * isoW);                     // isolíneas (0 en las advecciones)
@@ -662,9 +666,12 @@ function updateHum() {
   const [a, b, f] = bracket(m, hours), key = model + humVar + p + a + "_" + b + "_" + f.toFixed(2);
   if (key === humKey) return; humKey = key;
   const A = stepField(m, a, campoField(p), C.escala, m.sVol, "v"), B = stepField(m, b, campoField(p), C.escala, m.sVol, "v"), d = humTex.image.data;
-  // sin dato (nivel enmascarado junto al relieve): en campos con cero va al color neutro, no al extremo azul de la escala
-  const nul = C.cero ? Math.max(0, Math.min(255, Math.round(-lo / (hi - lo) * 255))) : 0;
-  for (let i = 0; i < d.length; i++) { const v = A[i] + (B[i] - A[i]) * f; d[i] = v === v ? Math.max(0, Math.min(255, Math.round((v - lo) / (hi - lo) * 255))) : nul; }
+  // sin dato: canal G = 0 (el shader no lo dibuja); el valor se deja en el neutro para que el borde no tome un color extremo
+  const nul = C.cero ? Math.max(0, Math.min(255, Math.round(-lo / (hi - lo) * 255))) : 128;
+  for (let i = 0, n = d.length / 2; i < n; i++) {
+    const v = A[i] + (B[i] - A[i]) * f, ok = v === v;
+    d[2 * i] = ok ? Math.max(0, Math.min(255, Math.round((v - lo) / (hi - lo) * 255))) : nul; d[2 * i + 1] = ok ? 255 : 0;
+  }
   humTex.needsUpdate = true;
   const z = zMean(m, p), U = humMat.uniforms; humMesh.position.y = z;
   U.zKm.value = z; U.vMin.value = lo; U.vMax.value = hi; U.iso.value = iso; U.cero.value = C.cero && (!C.sinIso || C.lineaCero) ? 1 : 0; U.isoW.value = C.sinIso ? 0 : 0.45;
