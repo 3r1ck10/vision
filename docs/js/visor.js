@@ -302,6 +302,7 @@ function drawLegend() {
     ctx.fillStyle = `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0})`; ctx.fillRect(x, 0, 1, cv.height);
   }
   $("legendTicks").innerHTML = p.ticks.map(t => `<span style="position:relative">${t}</span>`).join("") ;
+  if (colorMode === "pwat") $("legendTicks").innerHTML += `<span style="flex-basis:100%;text-align:left">líneas negras con su valor: cada ${PW_ISO[1]} mm desde ${PW_ISO[0]} mm</span>`;
   if (colorMode === "dt24") $("legendTicks").innerHTML += `<span style="flex-basis:100%;text-align:left">azul: más frío que ayer · rojo: más cálido · sin color: cambio menor de 0,5 °C · las primeras 24 h del pronóstico no tienen día anterior</span>`;
   $("legendTicks").title = p.title + " (" + p.unit + ")" + (colorMode === "viento" ? " · línea blanca: umbral de aviso " + UMB_W + " m/s" : "");
 }
@@ -950,21 +951,25 @@ const ISO = {
   // isolíneas del campo advectado en el nivel del plano (isotermas con la advección de T, isohúmedas con la de q):
   // negras y con su valor, para no confundirlas con los límites del mapa; sin etiquetas A/B
   niv: {campo: () => (humVar === "qa" ? "q" : "t") + humLevel, esc: 0.1, paso: () => humVar === "qa" ? CAMPOS.q.lev[humLevel][2] : CFG.isoT,
-        color: [0.04, 0.04, 0.06], oscuro: true, nombre: "Isolíneas del nivel", umbral: () => 99, alt: m => zMean(m, +humLevel) + 0.03, sinEtiquetas: true, valores: true}
+        color: [0.04, 0.04, 0.06], oscuro: true, nombre: "Isolíneas del nivel", umbral: () => 99, alt: m => zMean(m, +humLevel) + 0.03, sinEtiquetas: true, valores: true},
+  // agua precipitable: líneas negras sobre el relieve en los valores altos (la barra de color no los separa bien)
+  pw: {campo: "pw", esc: 1, paso: () => PW_ISO[1], desde: () => PW_ISO[0], color: [0.03, 0.03, 0.04], oscuro: true, nombre: "Agua precipitable", unidad: "mm",
+       umbral: () => 99, sinEtiquetas: true, valores: true}
 };
-const isoOn = {slp: false, z500: false, niv: false};
+const PW_ISO = [40, 5];                       // isolíneas de PWAT: desde 40 mm, cada 5 mm
+const isoOn = {slp: false, z500: false, niv: false, pw: false};
 const isoObj = {}, isoLbl = [];
 for (const k in ISO) {
   const g = new THREE.BufferGeometry();
   const o = new THREE.LineSegments(g, new THREE.LineBasicMaterial({vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false}));
   o.renderOrder = 5; o.frustumCulled = false; o.visible = false; world.add(o); isoObj[k] = {o, key: ""};
 }
-function contornos(m, F, paso) {                  // [{v, s: [lon, lat, lon, lat, ...]}]
+function contornos(m, F, paso, desde) {          // [{v, s: [lon, lat, lon, lat, ...]}]; desde: primer valor (opcional)
   const nx = m.lons.length, ny = m.lats.length; let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < F.length; i++) { const v = F[i]; if (v === v) { if (v < lo) lo = v; if (v > hi) hi = v; } }
   const out = [];
   if (!(hi > lo)) return out;
-  for (let L = Math.ceil(lo / paso) * paso; L <= hi; L += paso) {
+  for (let L = Math.max(Math.ceil(lo / paso) * paso, desde == null ? -Infinity : desde); L <= hi; L += paso) {
     const s = [];
     for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
       const k = j * nx + i, a = F[k], b = F[k + 1], c = F[k + nx + 1], d = F[k + nx];   // a SO, b SE, c NE, d NO
@@ -1013,7 +1018,7 @@ function updateIso() {
     algun = true;
     const key = model + humVar + humLevel + a + "_" + b + "_" + f.toFixed(1); if (key === obj.key) continue; obj.key = key;
     const paso = I.paso(), pos = [], col = [], z5 = I.alt ? I.alt(m) : 0, lado = CFG.isoLargo, vals = [];
-    for (const {v, s} of contornos(m, F, paso)) {
+    for (const {v, s} of contornos(m, F, paso, I.desde ? I.desde() : null)) {
       const fuerte = Math.abs(Math.round(v / paso)) % 4 === 0, br = I.oscuro ? 1 : fuerte ? 1 : 0.55;   // cada 4 isolíneas, más brillante
       if (I.valores && s.length) {                 // valor de la isolínea en 2 de sus tramos (a 1/3 y 2/3 de la lista)
         for (const fr of [0.33, 0.67]) { const q = Math.floor(s.length / 4 * fr) * 4; vals.push({v, lon: (s[q] + s[q + 2]) / 2, lat: (s[q + 1] + s[q + 3]) / 2}); }
@@ -1038,7 +1043,7 @@ function updateIso() {
     for (const x of vals) {
       const el = document.createElement("div"); el.className = "hl iv";
       el.textContent = +x.v.toFixed(paso < 1 ? 1 : 0); labelsEl.appendChild(el);
-      isoLbl.push({k, el, lon: x.lon, lat: x.lat, y: z5 + 0.05});
+      isoLbl.push({k, el, lon: x.lon, lat: x.lat, y: I.alt ? z5 + 0.05 : Math.max(0, demAt(x.lon, x.lat)) + 0.12});   // sobre el relieve si la línea lo sigue
     }
     if (!I.sinEtiquetas) for (const x of extremos(m, F, CFG.isoRadio, I.umbral()).slice(0, 40)) {
       const el = document.createElement("div");
@@ -1600,6 +1605,7 @@ function frame(now) {
   cloudMesh.visible = $("cClouds").checked;
   if (cloudMesh.visible) updateVolumes(m);
   isoOn.niv = (humVar === "ta" || humVar === "qa") && humLevel !== "off";   // con advección: isolíneas del campo advectado
+  isoOn.pw = colorMode === "pwat";                                          // con el color PWAT: sus isolíneas altas
   updateTerrainColors(); updateSun(); updateHum(); updateRain(dt); updateWind(dt); updateIso();
   const [a, b] = fmtTime(hours); $("clock").innerHTML = `${a}<small>${b}</small>`;
   document.body.classList.toggle("conPunto", !$("point").hidden);   // la barra de navegación se corre si la ficha está abierta
