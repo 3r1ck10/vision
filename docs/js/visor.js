@@ -521,12 +521,13 @@ const CAMPOS = {
       stops: ["#6b3d12", "#b07a35", "#e3c98f", "#eeeeee", "#98d3a0", "#3a9e64", "#14603f"],
       nota: "verde = llega aire más húmedo, marrón = llega aire más seco; líneas negras con valor = relación de mezcla del nivel (g/kg)"},
   // divergencia horizontal ∇·V (10⁻⁵ s⁻¹, calculada al cargar desde u y v del nivel). Rangos: según los datos (rangosAuto)
-  dv: {nombre: "Divergencia", unidad: "10⁻⁵ s⁻¹", escala: 1, cero: true, lev: {},
+  // sin isolíneas blancas: en los núcleos fuertes quedaban muy juntas y aclaraban el rojo; solo la línea oscura del cero
+  dv: {nombre: "Divergencia", unidad: "10⁻⁵ s⁻¹", escala: 1, cero: true, sinIso: true, lineaCero: true, lev: {},
       stops: ["#1d3f8f", "#3d7fd1", "#9cc7ee", "#eeeeee", "#f6b08a", "#e0552f", "#9c1b1b"],
-      nota: "azul = convergencia, rojo = divergencia; favorecen el ascenso la convergencia en 925–850 hPa y la divergencia en 250 hPa"}
+      nota: "azul = convergencia, rojo = divergencia, línea oscura = 0; favorecen el ascenso la convergencia en 925–850 hPa y la divergencia en 250 hPa"}
 };
 // ∇·V = (1/(a·cosφ))·∂u/∂λ + (1/a)·∂v/∂φ − v·tanφ/a en cada nivel con viento, diferencias centradas + suavizado de ±CFG.advR puntos.
-// Se enmascara donde el nivel queda bajo el relieve del modelo (o a menos de 500 m: capa límite).
+// Se enmascara solo donde el nivel queda bajo el relieve del modelo.
 function divergencia(m) {
   const nx = m.lons.length, ny = m.lats.length, dl = m.lons[1] - m.lons[0], da = m.lats[1] - m.lats[0], A_T = 6.371e6;
   const mx = m.lats.map(la => 1 / (dl * 111320 * Math.cos(la * Math.PI / 180))), my = 1 / (da * 110574);
@@ -534,7 +535,7 @@ function divergencia(m) {
   const bajoSuelo = p => {
     if (bajo[p]) return bajo[p];
     const l = (m.plev || []).indexOf(+p), z = l >= 0 && m.zlev ? m.zlev[l] : null, b = new Uint8Array(nx * ny);
-    for (let k = 0; k < nx * ny; k++) { const h = m.hgt ? m.hgt[k] : 0, zz = z && z[k] != null ? z[k] : pHeight(+p) * 1000; b[k] = h != null && h > zz - 500 ? 1 : 0; }
+    for (let k = 0; k < nx * ny; k++) { const h = m.hgt ? m.hgt[k] : 0, zz = z && z[k] != null ? z[k] : pHeight(+p) * 1000; b[k] = h != null && h > zz ? 1 : 0; }   // solo bajo el relieve: la convergencia junto al terreno sí interesa
     return (bajo[p] = b);
   };
   for (const st of m.steps) for (const key of Object.keys(st)) {
@@ -660,10 +661,12 @@ function updateHum() {
   const [a, b, f] = bracket(m, hours), key = model + humVar + p + a + "_" + b + "_" + f.toFixed(2);
   if (key === humKey) return; humKey = key;
   const A = stepField(m, a, campoField(p), C.escala, m.sVol, "v"), B = stepField(m, b, campoField(p), C.escala, m.sVol, "v"), d = humTex.image.data;
-  for (let i = 0; i < d.length; i++) { const v = A[i] + (B[i] - A[i]) * f; d[i] = v === v ? Math.max(0, Math.min(255, Math.round((v - lo) / (hi - lo) * 255))) : 0; }
+  // sin dato (nivel enmascarado junto al relieve): en campos con cero va al color neutro, no al extremo azul de la escala
+  const nul = C.cero ? Math.max(0, Math.min(255, Math.round(-lo / (hi - lo) * 255))) : 0;
+  for (let i = 0; i < d.length; i++) { const v = A[i] + (B[i] - A[i]) * f; d[i] = v === v ? Math.max(0, Math.min(255, Math.round((v - lo) / (hi - lo) * 255))) : nul; }
   humTex.needsUpdate = true;
   const z = zMean(m, p), U = humMat.uniforms; humMesh.position.y = z;
-  U.zKm.value = z; U.vMin.value = lo; U.vMax.value = hi; U.iso.value = iso; U.cero.value = C.cero && !C.sinIso ? 1 : 0; U.isoW.value = C.sinIso ? 0 : 0.45;
+  U.zKm.value = z; U.vMin.value = lo; U.vMax.value = hi; U.iso.value = iso; U.cero.value = C.cero && (!C.sinIso || C.lineaCero) ? 1 : 0; U.isoW.value = C.sinIso ? 0 : 0.45;
   C.stops.forEach((h, i) => { const c = hx(h); U.pal.value[i].set(c[0], c[1], c[2]); });
 }
 function drawHumLegend() {
@@ -673,7 +676,7 @@ function drawHumLegend() {
   box.hidden = false; const C = CAMPOS[humVar], [lo, hi, iso] = C.lev[humLevel], cv = $("humCv"), ctx = cv.getContext("2d");
   for (let x = 0; x < cv.width; x++) { const c = C.ramp(x / (cv.width - 1)); ctx.fillStyle = `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0})`; ctx.fillRect(x, 0, 1, cv.height); }
   const n = 4; $("humTicks").innerHTML = Array.from({length: n + 1}, (_, i) => `<span>${+(lo + (hi - lo) * i / n).toFixed(1)}</span>`).join("");
-  $("humNote").textContent = `${C.nombre} (${C.unidad}) a ${humLevel} hPa ≈ ${(zMean(MODELS[model], +humLevel) * 1000).toFixed(0)} m · isolíneas cada ${iso} ${C.unidad} · ${C.nota}`;
+  $("humNote").textContent = `${C.nombre} (${C.unidad}) a ${humLevel} hPa ≈ ${(zMean(MODELS[model], +humLevel) * 1000).toFixed(0)} m${C.sinIso ? "" : ` · isolíneas cada ${iso} ${C.unidad}`} · ${C.nota}`;
 }
 // Normaliza un valor (unidades del visor) del campo activo a 0–1, para colorear partículas
 function campoNorm(v) { const C = CAMPOS[humVar], [lo, hi] = C.lev[humLevel]; return (v * C.escala - lo) / (hi - lo); }
