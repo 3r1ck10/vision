@@ -622,8 +622,10 @@ for (const k in CAMPOS) CAMPOS[k].ramp = ramp(CAMPOS[k].stops.map((h, i) => [i /
 let humVar = "off", humLevel = "off", humMesh = null, humMat = null, humTex = null, humKey = "";
 const HUM = {ramp: v => CAMPOS[humVar].ramp(v)};   // usado por las partículas de viento sincronizadas
 function buildHum(W, D) {
-  // canal R = valor (0–255 en la escala del campo), canal G = hay dato (255) o no (0): lo sin dato no se dibuja
-  humTex = new THREE.DataTexture(new Uint8Array(VNX * VNY * 2), VNX, VNY, THREE.RGFormat, THREE.UnsignedByteType);
+  // canal R = valor (0–1 en la escala del campo), canal G = hay dato (1) o no (0): lo sin dato no se dibuja.
+  // Media precisión flotante, no 8 bits: con 256 niveles los gradientes débiles quedaban en mesetas planas y, si una
+  // meseta caía justo en el valor de una isolínea, toda se pintaba blanca (parches pegados a las isolíneas).
+  humTex = new THREE.DataTexture(new Uint16Array(VNX * VNY * 2), VNX, VNY, THREE.RGFormat, THREE.HalfFloatType);
   humTex.minFilter = humTex.magFilter = THREE.LinearFilter; humTex.needsUpdate = true;
   humMat = new THREE.ShaderMaterial({
     // opacidad alta: con 0.72 el color cambiaba según lo de abajo (más claro sobre continentes y bordes que sobre el mar)
@@ -646,10 +648,12 @@ function buildHum(W, D) {
         vec3 c = paleta(t);
         // Fuera de escala el valor queda recortado y plano (fwidth = 0): si el tope cae justo en una isolínea, toda la zona
         // se pintaba de blanco en bloques. Ahí no hay isolíneas, y el ancho de la línea nunca es cero.
+        // Donde el campo queda plano (fwidth casi 0) tampoco: la línea no tiene posición definida y rellenaba la zona.
         float dentro = step(0.004, t) * step(t, 0.996);
-        float f = q / iso, line = (1.0 - smoothstep(0.0, max(fwidth(f), 1e-3) * 1.3, abs(fract(f - 0.5) - 0.5))) * dentro;
+        float f = q / iso, wf = fwidth(f), wq = fwidth(q);
+        float line = wf > 1e-4 ? (1.0 - smoothstep(0.0, wf * 1.3, abs(fract(f - 0.5) - 0.5))) * dentro : 0.0;
         c = mix(c, vec3(1.0), line * isoW);                     // isolíneas (0 en las advecciones)
-        if (cero > 0.5) { float z0 = (1.0 - smoothstep(0.0, max(fwidth(q), 1e-3) * 2.2, abs(q))) * dentro; c = mix(c, vec3(0.08), z0 * 0.85); }   // línea de cero
+        if (cero > 0.5 && wq > 1e-4 * iso) { float z0 = (1.0 - smoothstep(0.0, wq * 2.2, abs(q))) * dentro; c = mix(c, vec3(0.08), z0 * 0.85); }   // línea de cero
         float near = smoothstep(zKm - 0.5, zKm, g);             // se desvanece al acercarse al relieve
         gl_FragColor = vec4(c, opac * (1.0 - 0.7 * near));
       }`,
@@ -670,10 +674,11 @@ function updateHum() {
   if (key === humKey) return; humKey = key;
   const A = stepField(m, a, campoField(p), C.escala, m.sVol, "v"), B = stepField(m, b, campoField(p), C.escala, m.sVol, "v"), d = humTex.image.data;
   // sin dato: canal G = 0 (el shader no lo dibuja); el valor se deja en el neutro para que el borde no tome un color extremo
-  const nul = C.cero ? Math.max(0, Math.min(255, Math.round(-lo / (hi - lo) * 255))) : 128;
+  const H = THREE.DataUtils.toHalfFloat, uno = H(1), cer = H(0);
+  const nul = H(C.cero ? Math.max(0, Math.min(1, -lo / (hi - lo))) : 0.5);
   for (let i = 0, n = d.length / 2; i < n; i++) {
     const v = A[i] + (B[i] - A[i]) * f, ok = v === v;
-    d[2 * i] = ok ? Math.max(0, Math.min(255, Math.round((v - lo) / (hi - lo) * 255))) : nul; d[2 * i + 1] = ok ? 255 : 0;
+    d[2 * i] = ok ? H(Math.max(0, Math.min(1, (v - lo) / (hi - lo)))) : nul; d[2 * i + 1] = ok ? uno : cer;
   }
   humTex.needsUpdate = true;
   const z = zMean(m, p), U = humMat.uniforms; humMesh.position.y = z;
