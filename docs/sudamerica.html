@@ -70,7 +70,8 @@
     <summary class="lbl">Campo en altura <span id="campoCnt" class="cnt cero"></span></summary>
     <div class="seg" id="segHum"></div>
     <div class="seg" id="segHumLev" hidden></div>
-    <div id="humLegend" hidden><canvas id="humCv" width="270" height="12"></canvas><div class="ticks" id="humTicks"></div><div class="note" id="humNote"></div></div>
+    <div id="humLegend" hidden><canvas id="humCv" width="270" height="12"></canvas><div class="ticks" id="humTicks"></div><div class="note" id="humNote"></div>
+      <div class="row"><span>Opacidad del campo</span><input type="range" id="rHumOp" min="0.4" max="1" step="0.05" value="0.75"><output id="oHumOp">75 %</output></div></div>
     <div class="note">En los niveles que tienen viento (925 a 250 hPa) el viento pasa al mismo nivel. Sus partículas se colorean por velocidad; con «Viento → Color: Como el campo» toman el color de este campo (la humedad o el calor que transportan, o si el aire sube o baja).</div>
   </details>
   <details class="grp plegable" id="avisoGrp" data-k="avisos">

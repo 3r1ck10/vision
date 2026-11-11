@@ -628,8 +628,8 @@ function buildHum(W, D) {
   humTex = new THREE.DataTexture(new Uint16Array(VNX * VNY * 2), VNX, VNY, THREE.RGFormat, THREE.HalfFloatType);
   humTex.minFilter = humTex.magFilter = THREE.LinearFilter; humTex.needsUpdate = true;
   humMat = new THREE.ShaderMaterial({
-    // opacidad alta: con 0.72 el color cambiaba según lo de abajo (más claro sobre continentes y bordes que sobre el mar)
-    uniforms: {qTex: {value: humTex}, hmap: {value: hmapTex}, hmapMax: {value: 7.0}, zKm: {value: 1.5}, vMin: {value: 0}, vMax: {value: 18}, iso: {value: 2}, opac: {value: 0.9}, isoW: {value: 0.45},
+    // opac: la fija el control «Opacidad del campo» (0.75 por defecto)
+    uniforms: {qTex: {value: humTex}, hmap: {value: hmapTex}, hmapMax: {value: 7.0}, zKm: {value: 1.5}, vMin: {value: 0}, vMax: {value: 18}, iso: {value: 2}, opac: {value: 0.75}, isoW: {value: 0.45},
                cero: {value: 0}, pal: {value: CAMPOS.q.stops.map(h => { const c = hx(h); return new THREE.Vector3(c[0], c[1], c[2]); })}},
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
@@ -1732,6 +1732,10 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
       if (v !== "off" && MODELS[model].steps[0]["u" + v]) { windLevel = v; buildWindSeg(); }
       drawHumLegend();
     };
+    // opacidad del campo en altura (se recuerda por dominio); con el terreno oscurecido debajo, bajarla no trae parches
+    const setHumOp = v => { humMat.uniforms.opac.value = v; $("rHumOp").value = v; $("oHumOp").textContent = Math.round(v * 100) + " %"; try { localStorage.setItem(LS("humOp"), v); } catch (e) {} };
+    { let s = null; try { s = parseFloat(localStorage.getItem(LS("humOp"))); } catch (e) {} setHumOp(s >= 0.4 && s <= 1 ? s : 0.75); }
+    $("rHumOp").oninput = e => setHumOp(+e.target.value);
     const buildLevSeg = () => {
       $("segHumLev").hidden = humVar === "off";
       if (humVar === "off") return;
