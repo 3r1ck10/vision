@@ -657,7 +657,10 @@ function buildHum(W, D) {
         float near = smoothstep(zKm - 0.5, zKm, g);             // se desvanece al acercarse al relieve
         gl_FragColor = vec4(c, opac * (1.0 - 0.7 * near));
       }`,
-    transparent: true, depthWrite: false, side: THREE.DoubleSide
+    // escribe profundidad: lo que queda debajo del plano (límites sobre el relieve, gotas…) ya no se ve a través de él.
+    // Antes los límites del relieve y los del plano se veían a la vez, corridos por la perspectiva (paralaje).
+    // polygonOffset: el plano queda un pelo más atrás, para no tapar lo que va a su misma altura (partículas, límites del nivel)
+    transparent: true, depthWrite: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4
   });
   humMesh = new THREE.Mesh(new THREE.PlaneGeometry(W, D), humMat);
   humMesh.rotation.x = -Math.PI / 2; humMesh.visible = false; humMesh.renderOrder = 1;
@@ -1112,7 +1115,7 @@ function buildLimites(L) {
   }
   const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   bordes = new THREE.LineSegments(g, new THREE.LineBasicMaterial({color: 0xf4f0e6, transparent: true, opacity: 0.85}));
-  bordes.renderOrder = 1; world.add(bordes);
+  bordes.renderOrder = 2; world.add(bordes);         // después del campo en altura (1): bajo el plano no se dibujan
   // copia plana de los límites a la altura del campo en altura (el plano tapa los del relieve); oscuros, para no
   // confundirlos con las isolíneas blancas. Se muestra solo con un campo activo (ver bordesNivel)
   const plano = [];
@@ -1139,7 +1142,9 @@ const vtmp = new THREE.Vector3();
 function updateLabels() {
   const w = innerWidth, h = innerHeight;
   if (bordes && bordes.visible) for (const d of deptLabels) {
-    vtmp.set(toX(d.lon), (d.g + 1.5) * exag, toZ(d.lat)).project(camera);
+    // con un campo en altura, el nombre va sobre el plano (junto a los límites de ese nivel), salvo que el relieve lo supere
+    const yk = bordesAlto && bordesAlto.visible ? Math.max(d.g + 1.5, humMesh.position.y + 0.3) : d.g + 1.5;
+    vtmp.set(toX(d.lon), yk * exag, toZ(d.lat)).project(camera);
     const vis = vtmp.z < 1 && Math.abs(vtmp.x) < 1 && Math.abs(vtmp.y) < 1;
     d.el.style.display = vis ? "" : "none";
     if (vis) d.el.style.transform = `translate(${(vtmp.x*0.5+0.5)*w}px, ${(-vtmp.y*0.5+0.5)*h}px) translate(-50%,-50%)`;
