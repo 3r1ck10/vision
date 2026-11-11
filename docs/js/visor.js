@@ -644,9 +644,12 @@ function buildHum(W, D) {
         if (tx.g < 0.5) discard;                                // sin dato (fuera del modelo o enmascarado)
         float t = tx.r, q = vMin + t * (vMax - vMin);           // valor en unidades del campo
         vec3 c = paleta(t);
-        float f = q / iso, line = 1.0 - smoothstep(0.0, fwidth(f) * 1.3, abs(fract(f - 0.5) - 0.5));
+        // Fuera de escala el valor queda recortado y plano (fwidth = 0): si el tope cae justo en una isolínea, toda la zona
+        // se pintaba de blanco en bloques. Ahí no hay isolíneas, y el ancho de la línea nunca es cero.
+        float dentro = step(0.004, t) * step(t, 0.996);
+        float f = q / iso, line = (1.0 - smoothstep(0.0, max(fwidth(f), 1e-3) * 1.3, abs(fract(f - 0.5) - 0.5))) * dentro;
         c = mix(c, vec3(1.0), line * isoW);                     // isolíneas (0 en las advecciones)
-        if (cero > 0.5) { float z0 = 1.0 - smoothstep(0.0, fwidth(q) * 2.2, abs(q)); c = mix(c, vec3(0.08), z0 * 0.85); }   // línea de cero
+        if (cero > 0.5) { float z0 = (1.0 - smoothstep(0.0, max(fwidth(q), 1e-3) * 2.2, abs(q))) * dentro; c = mix(c, vec3(0.08), z0 * 0.85); }   // línea de cero
         float near = smoothstep(zKm - 0.5, zKm, g);             // se desvanece al acercarse al relieve
         gl_FragColor = vec4(c, opac * (1.0 - 0.7 * near));
       }`,
