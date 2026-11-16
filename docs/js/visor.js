@@ -87,6 +87,7 @@ function rainStep(m, h) {                      // paso cuyo intervalo (t[k-1], t
 }
 // día de lluvia de 7 h a 7 h local (12Z a 12Z) que contiene la hora h: su inicio en horas desde T0
 const dia24 = h => 12 + 24 * Math.floor((h - 12) / 24);
+let luzComp = 1;                                  // factor de brillo de la capa de lluvia 24 h según la luz del sol (updateSun)
 // lluvia acumulada (mm) en la malla del modelo entre s y s+24 h; completo = el modelo cubre las 24 h
 function lluvia24(m, s) {
   const c = m.pp24 || (m.pp24 = {}); if (c[s]) return c[s];
@@ -797,7 +798,7 @@ function updateTerrainColors() {
 }
 function pintarTerreno(colorMode) {                // el parámetro tapa al global: todo lo de abajo usa el modo efectivo
   const m = MODELS[model], n = terrLon.length;
-  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" || colorMode === "apagado" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : colorMode === "pp24" ? dia24(hours) : hours.toFixed(2));
+  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" || colorMode === "apagado" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : colorMode === "pp24" ? dia24(hours) + "_" + Math.round(luzComp * 20) : hours.toFixed(2));
   if (key === lastTerrKey) return;           // nada cambió: no recalcular 49 000 vértices
   lastTerrKey = key;
   const mat = terrain.material, wantMap = colorMode === "natural" && satTex ? satTex : null;
@@ -823,8 +824,8 @@ function pintarTerreno(colorMode) {                // el parámetro tapa al glob
     for (let i = 0; i < n; i++) {
       const b0 = base[i*3]*dim+0.03, b1 = base[i*3+1]*dim+0.04, b2 = base[i*3+2]*dim+0.05, v = V ? V[i] : 0;
       if (!(v >= 1)) { terrColors[i*3]=b0; terrColors[i*3+1]=b1; terrColors[i*3+2]=b2; continue; }
-      const c = p.f(v), a = 0.92;
-      terrColors[i*3]=b0+(c[0]-b0)*a; terrColors[i*3+1]=b1+(c[1]-b1)*a; terrColors[i*3+2]=b2+(c[2]-b2)*a;
+      const c = p.f(v), a = 0.92, k = luzComp;      // k: de día se oscurece para que el sol no los lleve al blanco
+      terrColors[i*3]=(b0+(c[0]-b0)*a)*k; terrColors[i*3+1]=(b1+(c[1]-b1)*a)*k; terrColors[i*3+2]=(b2+(c[2]-b2)*a)*k;
     }
     drawLegend();                                  // la leyenda dice qué día 7-7 se está mostrando
   }
@@ -875,6 +876,8 @@ function updateSun() {
   }
   sun.position.copy(v).multiplyScalar(500);
   sun.intensity = 0.12 + 1.05 * day; hemi.intensity = 0.22 + 0.4 * day;
+  // cuánto aclara la luz un suelo plano: la capa de lluvia 24 h se compensa para mostrar los colores de su barra
+  luzComp = Math.max(0.55, Math.min(1, 0.95 / (0.8 * hemi.intensity + sun.intensity * Math.max(0, v.y))));
   sun.color.setHSL(luzMode === "clara" && realDay < 0.5 ? 0.6 : 0.1, 0.5 * (1 - realDay) * (luzMode === "real" ? 1 : 0.4) + 0.2, 0.55 + 0.25 * day);
   const sky = skyNight.clone().lerp(skyDusk, THREE.MathUtils.smoothstep(v.y, -0.12, 0.05)).lerp(skyDay, luzMode === "dia" ? 1 : realDay);
   if (luzMode === "clara") sky.lerp(skyClear, 0.75 * (1 - realDay));
