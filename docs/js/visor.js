@@ -985,7 +985,8 @@ function spawnWind(i) {
 }
 function initWind() { for (let i = 0; i < NWMAX; i++) { spawnWind(i); wSt[i*4+2] = Math.random() * wSt[i*4+3]; } }   // se llama cuando ya hay relieve
 function updateWind(dt) {
-  wind.visible = windLevel !== "off"; if (!wind.visible) { drawWindLegend(); return; }
+  updateStreams();
+  wind.visible = windLevel !== "off" && windRep !== "corriente"; if (!wind.visible) { drawWindLegend(); return; }
   const m = MODELS[model], wg = windGridFor(m), K = CFG.kw || 2.2;   // unidades de escena por segundo de animación por m/s
   const esc = windEsc(); drawWindLegend();
   const lon0 = DEM.lons[0], lon1 = DEM.lons[DEM.lons.length-1], lat0 = DEM.lats[0], lat1 = DEM.lats[DEM.lats.length-1];
@@ -1017,6 +1018,98 @@ function updateWind(dt) {
     }
   }
   wGeo.attributes.position.needsUpdate = true; wGeo.attributes.color.needsUpdate = true;
+}
+// ---------- Líneas de corriente clásicas ----------
+// Líneas continuas tangentes al viento, espaciadas de forma pareja (método de Jobard y Lefer): cada línea nace en una
+// semilla libre y avanza hacia adelante y atrás hasta acercarse a otra línea, salir del dominio o caer en calma.
+// Flechas cada cierto tramo con el sentido del viento. Color: velocidad (misma escala que las partículas) o blanco.
+let windRep = "particulas", strDens = "normal", strCol = "vel";
+const STR_DENS = {rala: 28, normal: 42, densa: 62};           // líneas a lo ancho del dominio
+const STR_MAX = 160000;                                        // tramos máximos (cada tramo = 2 vértices)
+const sPos = new Float32Array(STR_MAX * 6), sCol = new Float32Array(STR_MAX * 6);
+const sGeo = new THREE.BufferGeometry(); sGeo.setAttribute("position", new THREE.BufferAttribute(sPos, 3)); sGeo.setAttribute("color", new THREE.BufferAttribute(sCol, 3));
+const streams = new THREE.LineSegments(sGeo, new THREE.LineBasicMaterial({vertexColors: true, transparent: true, opacity: 0.95}));
+streams.renderOrder = 5; streams.frustumCulled = false; streams.visible = false; world.add(streams);
+let strKey = "";
+function updateStreams() {
+  streams.visible = windLevel !== "off" && windRep !== "particulas"; if (!streams.visible) return;
+  const m = MODELS[model], [a, b, f] = bracket(m, hours);
+  const key = model + windLevel + a + "_" + b + "_" + (Math.round(f * 4) / 4) + strDens + strCol; if (key === strKey) return; strKey = key;
+  // viento del instante (interpolado entre pasos, en cuartos de paso para no recalcular en cada cuadro)
+  const su = "u" + windLevel, sv = "v" + windLevel, A = m.steps[a], B = m.steps[b], ff = Math.round(f * 4) / 4;
+  const mix = (x, y) => { if (!x || !y) return null; const o = new Float32Array(x.length); for (let i = 0; i < x.length; i++) o[i] = (x[i] == null || y[i] == null) ? NaN : (x[i] + (y[i] - x[i]) * ff) / 10; return o; };
+  const U = mix(A[su], B[su]), V = mix(A[sv], B[sv]);
+  let ns = 0;
+  if (U && V) {
+    const lon0 = DEM.lons[0], lon1 = DEM.lons[DEM.lons.length-1], lat0 = DEM.lats[0], lat1 = DEM.lats[DEM.lats.length-1];
+    const W = (lon1 - lon0) * KX, H = (lat1 - lat0) * KY;                 // dominio en unidades de escena
+    const dsep = W / STR_DENS[strDens], dtest = dsep * 0.5, paso = dsep / 5, sup = windLevel === "10", esc = windEsc();
+    // grilla de ocupación con los puntos ya trazados (celda = dsep)
+    const gx = Math.ceil(W / dsep) + 1, gy = Math.ceil(H / dsep) + 1, celdas = new Array(gx * gy);
+    const X = lon => (lon - lon0) * KX, Y = lat => (lat - lat0) * KY;
+    // ¿hay lugar en (x, y)? Los puntos de la misma línea cercanos en su recorrido (los últimos 12, o el arranque
+    // de ambas mitades junto a la semilla) no cuentan; los más viejos sí: así un giro cerrado no se enrosca encima
+    const libre = (x, y, d, linea, mit, n) => {
+      const ci = Math.floor(x / dsep), cj = Math.floor(y / dsep);
+      for (let j = cj - 1; j <= cj + 1; j++) for (let i = ci - 1; i <= ci + 1; i++) {
+        if (i < 0 || j < 0 || i >= gx || j >= gy) continue; const c = celdas[j * gx + i]; if (!c) continue;
+        for (let k = 0; k < c.length; k += 5) {
+          if (c[k+2] === linea && (c[k+3] === mit ? n - c[k+4] < 12 : c[k+4] < 12 && n < 12)) continue;
+          const dx = c[k] - x, dy = c[k+1] - y; if (dx * dx + dy * dy < d * d) return false;
+        }
+      }
+      return true;
+    };
+    const marcar = (x, y, linea, mit, n) => { const i = Math.floor(x / dsep), j = Math.floor(y / dsep); if (i < 0 || j < 0 || i >= gx || j >= gy) return; (celdas[j * gx + i] || (celdas[j * gx + i] = [])).push(x, y, linea, mit, n); };
+    const dir = (lon, lat) => { uvAt(m.lons, m.lats, U, V, lon, lat); const u = UV[0], v = UV[1], s = Math.hypot(u, v); return u === u && s > 0.2 ? [u / s, v / s, s] : null; };
+    const alto = (lon, lat) => { const g = demAt(lon, lat); return sup ? g + 0.15 : (g > windHeight(g) - 0.15 ? NaN : windHeight(g)); };
+    // una mitad de la línea (sentido +1 adelante, -1 atrás): lista de [lon, lat, rapidez, y]
+    const mitad = (lon, lat, sg, linea) => {
+      const pts = [];
+      for (let n = 0; n < 600; n++) {
+        const d1 = dir(lon, lat); if (!d1) break;
+        const y = alto(lon, lat); if (!(y === y)) break;
+        pts.push([lon, lat, d1[2], y]); marcar(X(lon), Y(lat), linea, sg, n);
+        // Runge-Kutta 2 en unidades de escena (la dirección no depende de la rapidez: paso fijo)
+        const mlon = lon + sg * d1[0] * paso / 2 / KX, mlat = lat + sg * d1[1] * paso / 2 / KY, d2 = dir(mlon, mlat); if (!d2) break;
+        const nlon = lon + sg * d2[0] * paso / KX, nlat = lat + sg * d2[1] * paso / KY;
+        if (nlon < lon0 || nlon > lon1 || nlat < lat0 || nlat > lat1) break;
+        if (!libre(X(nlon), Y(nlat), dtest, linea, sg, n + 1)) break;   // choca con otra línea o se cierra sobre sí misma
+        lon = nlon; lat = nlat;
+      }
+      return pts;
+    };
+    // semillas: grilla regular en orden pseudoaleatorio fijo (las líneas no "bailan" entre pasos)
+    const semillas = []; for (let j = 0; j < gy; j++) for (let i = 0; i < gx; i++) semillas.push([lon0 + (i + 0.5) * dsep / KX, lat0 + (j + 0.5) * dsep / KY]);
+    let r = 12345; const rnd = () => (r = (r * 16807) % 2147483647) / 2147483647;
+    for (let i = semillas.length - 1; i > 0; i--) { const k = Math.floor(rnd() * (i + 1)); [semillas[i], semillas[k]] = [semillas[k], semillas[i]]; }
+    let linea = 0;
+    const tramo = (p, q, c0, c1) => { if (ns >= STR_MAX) return; const o = ns * 6;
+      sPos[o] = toX(p[0]); sPos[o+1] = p[3]; sPos[o+2] = toZ(p[1]); sPos[o+3] = toX(q[0]); sPos[o+4] = q[3]; sPos[o+5] = toZ(q[1]);
+      sCol[o] = c0[0]; sCol[o+1] = c0[1]; sCol[o+2] = c0[2]; sCol[o+3] = c1[0]; sCol[o+4] = c1[1]; sCol[o+5] = c1[2]; ns++; };
+    const color = s => strCol === "vel" ? windRamp(s / esc) : [0.95, 0.97, 1];
+    for (const [slon, slat] of semillas) {
+      if (ns >= STR_MAX) break;
+      if (!libre(X(slon), Y(slat), dsep, -1, 0, 0) || !dir(slon, slat)) continue;
+      linea++;
+      const ad = mitad(slon, slat, 1, linea), at = mitad(slon, slat, -1, linea);   // adelante y atrás desde la semilla
+      const pts = at.reverse().concat(ad.slice(1));
+      if (pts.length < 6) continue;
+      for (let n = 0; n < pts.length - 1; n++) tramo(pts[n], pts[n + 1], color(pts[n][2]), color(pts[n + 1][2]));
+      // flechas: una cada ~3 separaciones a lo largo de la línea, con la punta en el sentido del viento
+      const cada = Math.max(8, Math.round(3 * dsep / paso));
+      for (let n = Math.floor(cada / 2); n < pts.length - 1; n += cada) {
+        const p = pts[n], q = pts[n + 1], dx = (q[0] - p[0]) * KX, dy = (q[1] - p[1]) * KY, L = Math.hypot(dx, dy) || 1;
+        const ux = dx / L, uy = dy / L, la = dsep * 0.32, an = 0.45;
+        for (const sgn of [1, -1]) {
+          const bx = -(ux * Math.cos(an) - sgn * uy * Math.sin(an)) * la, by = -(uy * Math.cos(an) + sgn * ux * Math.sin(an)) * la;
+          tramo(q, [q[0] + bx / KX, q[1] + by / KY, q[2], q[3]], color(q[2]), color(q[2]));
+        }
+      }
+    }
+  }
+  sGeo.setDrawRange(0, ns * 2);
+  sGeo.attributes.position.needsUpdate = true; sGeo.attributes.color.needsUpdate = true;
 }
 let windOff = new THREE.Vector2();
 function meanSteer(m) {
@@ -1931,6 +2024,18 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     aplicaW();
     try { if (localStorage.getItem(LS("wColor")) === "campo") wColor = "campo"; } catch (e) {}
     seg("segWCol", [["vel","Velocidad"],["campo","Como el campo"]], () => wColor, v => { wColor = v; windKey = null; try { localStorage.setItem(LS("wColor"), v); } catch (e) {} });
+    // partículas, líneas de corriente clásicas o ambas (se recuerda por dominio)
+    try { const a = localStorage.getItem(LS("wRep")), b = localStorage.getItem(LS("sDens")), c = localStorage.getItem(LS("sCol"));
+          if (["particulas", "corriente", "ambas"].includes(a)) windRep = a; if (STR_DENS[b]) strDens = b; if (c === "vel" || c === "blanco") strCol = c; } catch (e) {}
+    const aplicaRep = () => {
+      document.querySelectorAll(".wpart").forEach(e => e.style.display = windRep === "corriente" ? "none" : "");
+      document.querySelectorAll(".wstr").forEach(e => e.style.display = windRep === "particulas" ? "none" : "");
+      strKey = ""; try { localStorage.setItem(LS("wRep"), windRep); localStorage.setItem(LS("sDens"), strDens); localStorage.setItem(LS("sCol"), strCol); } catch (e) {}
+    };
+    seg("segWRep", [["particulas","Partículas"],["corriente","Líneas de corriente"],["ambas","Ambas"]], () => windRep, v => { windRep = v; aplicaRep(); });
+    seg("segSDens", [["rala","Ralas"],["normal","Normal"],["densa","Densas"]], () => strDens, v => { strDens = v; aplicaRep(); });
+    seg("segSCol", [["vel","Velocidad"],["blanco","Blanco"]], () => strCol, v => { strCol = v; aplicaRep(); });
+    aplicaRep();
     // Campo en altura: variable y nivel. Si el nivel tiene viento horizontal, las partículas pasan a ese nivel
     // y se colorean con el campo (humedad que transportan, o si el aire sube o baja).
     const setCampoNivel = v => {
