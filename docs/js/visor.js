@@ -1458,6 +1458,7 @@ function renderPronPunto() {
     h += `<td style="white-space:normal;min-width:150px;text-align:left">${p && nPr ? p.txt : ""}</td></tr>`;
   });
   $("pronTbl").innerHTML = h + "</tbody>";
+  renderPronMomentos(s);
   // qué se corrige en este lugar
   const ses = Object.entries(s.sesgo || {}).filter(([, v]) => v[2] > 0);
   const lado = (v, n) => Math.abs(v) < 0.3 ? `${n} casi sin sesgo` : `${n} ${v > 0 ? "más cálida" : "más fría"} ${Math.abs(v).toFixed(1)} °C`;
@@ -1467,6 +1468,27 @@ function renderPronPunto() {
     `<br><b>Día de 7 h a 7 h</b>: Tmín = noche que termina a las 7 h; Tmáx = de 7 a 19 h; lluvia = de 7 h a 7 h del día siguiente (como la red Voz y Data). ` +
     `<b>Negrita</b> = observado; <i>cursiva</i> = pronóstico (consenso de los modelos calibrados, con su rango debajo). T = traza. ` +
     `Los modelos se llevan a la altitud real de la estación (6.5 °C/km) y se les resta el error medio de los últimos 30 días; la lluvia se escala según cuánto llovió de verdad frente a lo pronosticado en la región. Nubosidad = nubes bajas y medias juntas, de 7 a 19 h.`;
+}
+// nubes y lluvia por momento del día (consenso de los modelos; lluvia calibrada como la del día)
+const MOM = [["Mañana", "7–13 h"], ["Tarde", "13–19 h"], ["Noche", "19–1 h"], ["Madrugada", "1–7 h (día sig.)"]];
+function renderPronMomentos(s) {
+  const P = PRON, dias = P.fechas.filter(fe => fe >= P.hoy && s.pron[fe] && s.pron[fe].f);
+  $("pronMomBox").hidden = !dias.length; if (!dias.length) return;
+  let h = `<thead><tr><th>Día</th>${MOM.map(([n, r]) => `<th>${n}<br><small style="font-weight:400">${r}</small></th>`).join("")}</tr></thead><tbody>`;
+  for (const fe of dias) {
+    h += `<tr class="${fe === P.hoy ? "hoy" : ""}"><td class="dia">${fmtF(fe)}${fe === P.hoy ? " · hoy" : ""}</td>`;
+    h += s.pron[fe].f.map(([nub, pp, prob, txt]) => {
+      if (nub == null && pp == null) return "<td>—</td>";
+      const llueve = /llov|lluvia/.test(txt) && !/aislada/.test(txt), fondo = `rgba(230,236,242,${nub == null ? 0 : 0.02 + 0.13 * nub / 100})`;
+      return `<td style="background:${fondo}" title="Nubes bajas+medias ${nub == null ? "—" : nub + " %"} · lluvia ${ppF(pp)} mm · ${prob == null ? "—" : prob + " %"} de los modelos con ≥0.5 mm">` +
+        `${llueve ? `<b class="pp">${txt}</b>` : txt}<small>nubes ${nub == null ? "—" : nub + " %"} · ${ppF(pp)} mm · ${prob == null ? "—" : prob + " %"}</small>` +
+        `<span class="bar" aria-hidden="true"><i style="width:${prob || 0}%"></i></span></td>`;
+    }).join("") + "</tr>";
+  }
+  $("pronMom").innerHTML = h + "</tbody>";
+  $("pronMomNota").innerHTML = `Cada celda: cielo (nubes bajas y medias, promedio de los modelos) y lluvia de esas 6 h (consenso calibrado). ` +
+    `Debajo: % de nubes, mm y <b>probabilidad</b> = proporción de modelos (pesada por su acierto) que dan 0.5 mm o más; la barra azul la muestra. "Lluvia aislada" = la da solo alguno de los modelos. ` +
+    `La madrugada es la del día siguiente, para que las cuatro franjas sumen la lluvia del día (7 h a 7 h). Es orientativo: los modelos ubican mejor el día con lluvia que la hora exacta.`;
 }
 function drawPron() {
   const s = pronSitio, P = PRON, cv = $("pronCv"); if (!s || $("pron").hidden || pronTab !== "punto") return;

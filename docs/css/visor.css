@@ -159,7 +159,12 @@ body.sinPanel #layers{display:none}
 .badge.ob{border-color:#7be0a8;color:#7be0a8} .badge.pr{border-color:var(--accent);color:var(--accent)} .badge.mix{border-color:var(--warn);color:var(--warn)}
 #pron td.best{color:#7be0a8;font-weight:700}
 #pronRes tbody tr{cursor:pointer} #pronRes tbody tr:hover td{background:rgba(79,195,232,.08)}
-#pronRes td small,#pronTbl td small,#pronRank td small{display:block;font-family:var(--f-mono);font-size:10px;color:var(--muted);font-style:normal;font-weight:400}
+#pronMom td{text-align:left;white-space:normal;min-width:118px;vertical-align:top}
+#pronMom td b{font-weight:600}
+#pronMom td.dia{min-width:0;white-space:nowrap}
+#pronMom td .bar{display:block;height:4px;border-radius:2px;margin-top:5px;background:rgba(143,160,177,.18);overflow:hidden}
+#pronMom td .bar i{display:block;height:100%;background:#5aa8ff}
+#pronRes td small,#pronTbl td small,#pronRank td small,#pronMom td small{display:block;font-family:var(--f-mono);font-size:10px;color:var(--muted);font-style:normal;font-weight:400}
 .pr-mejor{display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
 .pr-mejor div{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
 .pr-mejor b{display:block;font-family:var(--f-display);font-size:22px}
