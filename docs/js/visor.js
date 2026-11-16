@@ -85,6 +85,24 @@ function bracket(m, h) {
 function rainStep(m, h) {                      // paso cuyo intervalo (t[k-1], t[k]] contiene h
   const a = m.abs; for (let k = 1; k < a.length; k++) if (h <= a[k]) return k; return a.length - 1;
 }
+// día de lluvia de 7 h a 7 h local (12Z a 12Z) que contiene la hora h: su inicio en horas desde T0
+const dia24 = h => 12 + 24 * Math.floor((h - 12) / 24);
+// lluvia acumulada (mm) en la malla del modelo entre s y s+24 h; completo = el modelo cubre las 24 h
+function lluvia24(m, s) {
+  const c = m.pp24 || (m.pp24 = {}); if (c[s]) return c[s];
+  const a = m.abs, n = m.lons.length * m.lats.length, V = new Float32Array(n);
+  let desde = Infinity, hasta = -Infinity;
+  for (let k = 0; k < a.length; k++) {
+    if (!(a[k] > s + 0.01 && a[k] <= s + 24.01) || !m.steps[k].pr) continue;
+    desde = Math.min(desde, a[k] - m.intv[k]); hasta = Math.max(hasta, a[k]);
+    const p = m.steps[k].pr; for (let i = 0; i < n; i++) V[i] += (p[i] || 0) * 0.1;
+  }
+  return (c[s] = {V, completo: desde <= s + 0.01 && hasta >= s + 23.99, hay: hasta > -Infinity});
+}
+function fmtDia24(s) {
+  const f = h => { const d = new Date(T0 + h * 3.6e6 - 5 * 3.6e6); return `${DIAS[d.getUTCDay()]} ${d.getUTCDate()} ${MESES[d.getUTCMonth()]}`; };
+  return `${f(s)} 7 h → ${f(s + 24)} 7 h`;
+}
 
 // ---------- Escena ----------
 const renderer = new THREE.WebGLRenderer({antialias: true, powerPreference: "high-performance"});
@@ -272,10 +290,22 @@ const ramp = stops => v => {
 const hx = h => [parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255];
 const WATER = hx("#163a55");
 const hypso = ramp([[0,hx("#c9b98f")],[150,hx("#b8a77a")],[400,hx("#5f7f4a")],[1000,hx("#4d7140")],[1800,hx("#7d8450")],[2600,hx("#8f7a58")],[3400,hx("#7c6656")],[4200,hx("#9a8f86")],[5200,hx("#e9e6e1")]]);
+// colores de 1 a 19 mm (verdes 1-9, celestes y azules 10-19); de 20 a 80 va de crema a rojo
+const PP24_C = [[218,249,218],[181,244,181],[144,238,144],[120,220,120],[96,201,96],[72,183,72],[48,165,48],[24,146,24],[0,128,0],
+  [175,238,238],[117,244,244],[58,249,249],[0,255,255],[5,237,255],[10,218,255],[15,200,255],[20,181,255],[25,163,255],[30,144,255]].map(c => c.map(x => x / 255));
 const PAL = {
   temperatura: {f: ramp([[-4,hx("#5b3fa3")],[2,hx("#3f6fd8")],[8,hx("#38b3d9")],[14,hx("#4cc38a")],[20,hx("#d8d64a")],[26,hx("#f29b38")],[32,hx("#e2452d")],[38,hx("#9c1430")]]), min:-4, max:38, ticks:[-4,5,14,23,32,38], unit:"°C", title:"Temperatura 2 m (corregida por altitud)"},
   lluvia: {f: ramp([[0,[0,0,0]],[0.2,hx("#9cc9f5")],[1,hx("#5aa8ff")],[3,hx("#2f6fe0")],[8,hx("#5b3fd0")],[15,hx("#c040c8")],[30,hx("#ff5aa0")]]), min:0, max:30, ticks:[0,1,3,8,15,30], unit:"mm/3h", title:"Lluvia en 3 h", log:true},
   // agua precipitable: vapor de toda la columna (mm). Selva húmeda 50–65 mm; sierra 10–25; costa seca < 25
+  // lluvia del día de 7 h a 7 h local (12Z-12Z), con la barra del mapa "Precipitación c/24 h" (1 mm por color)
+  pp24: {f: v => {
+      const b = Math.floor(v);
+      if (b < 1) return [1, 1, 1];
+      if (b < 10) return PP24_C[b - 1];
+      if (b < 20) return PP24_C[b - 1];
+      if (b >= 80) return [1, 0, 0];
+      const t = (b - 20) / 59; return [1, (250 + (4 - 250) * t) / 255, (170 + (3 - 170) * t) / 255];
+    }, min:0, max:80, ticks:[0,10,20,30,40,50,60,70,80], unit:"mm", title:"Lluvia del día (7 h a 7 h)"},
   pwat: {f: ramp([[0,hx("#7a4a1e")],[15,hx("#c9a35e")],[25,hx("#e8e2b0")],[35,hx("#8fd18a")],[45,hx("#2fa36b")],[55,hx("#2a78c8")],[65,hx("#5a35b8")],[75,hx("#b03aa8")]]), min:0, max:75, ticks:[0,15,25,35,45,55,65,75], unit:"mm", title:"Agua precipitable (vapor de toda la columna)"},
   cape: {f: ramp([[0,[0,0,0]],[100,hx("#3a6b4a")],[500,hx("#c8c24a")],[1000,hx("#f29b38")],[2000,hx("#e2452d")],[3000,hx("#b0108a")]]), min:0, max:3000, ticks:[0,500,1000,2000,3000], unit:"J/kg", title:"CAPE"},
   relieve: {f: hypso, min:0, max:5200, ticks:[0,1000,2000,3000,4000,5200], unit:"m", title:"Altitud"},
@@ -308,12 +338,17 @@ function drawLegend() {
   const pos = v => p.log ? Math.log1p(v) / Math.log1p(p.max) : (v - p.min) / (p.max - p.min);
   for (let x = 0; x < cv.width; x++) {
     const t = x / (cv.width - 1); let v = p.log ? Math.expm1(t * Math.log1p(p.max)) : p.min + t * (p.max - p.min);
-    let c = p.f(v); if (colorMode === "lluvia" && v < 0.2) c = [0.2,0.25,0.3]; if (colorMode === "cape" && v < 100) c = [0.2,0.25,0.3]; if (colorMode === "viento" && v < 10) c = [0.2,0.25,0.3]; if (colorMode === "dt24" && Math.abs(v) < 0.5) c = [0.2,0.25,0.3];
+    let c = p.f(v); if (colorMode === "lluvia" && v < 0.2) c = [0.2,0.25,0.3]; if (colorMode === "pp24" && v < 1) c = [0.2,0.25,0.3]; if (colorMode === "cape" && v < 100) c = [0.2,0.25,0.3]; if (colorMode === "viento" && v < 10) c = [0.2,0.25,0.3]; if (colorMode === "dt24" && Math.abs(v) < 0.5) c = [0.2,0.25,0.3];
     if (colorMode === "viento" && Math.abs(v - UMB_W) <= (p.max - p.min) / cv.width) c = [1, 1, 1];   // marca del umbral
     ctx.fillStyle = `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0})`; ctx.fillRect(x, 0, 1, cv.height);
   }
   $("legendTicks").innerHTML = p.ticks.map(t => `<span style="position:relative">${t}</span>`).join("") ;
   if (colorMode === "pwat") $("legendTicks").innerHTML += `<span style="flex-basis:100%;text-align:left">líneas negras con su valor: cada ${PW_ISO[1]} mm desde ${PW_ISO[0]} mm</span>`;
+  if (colorMode === "pp24" && T0) {
+    const s = dia24(hours), L = MODELS[model] ? lluvia24(MODELS[model], s) : null;
+    $("legendTicks").innerHTML += `<span style="flex-basis:100%;text-align:left">${model}: lluvia de ${fmtDia24(s)} (12Z a 12Z) · sin color: menos de 1 mm` +
+      (L && !L.hay ? ` · <b style="color:#ffb454">sin datos para ese día</b>` : L && !L.completo ? ` · <b style="color:#ffb454">día incompleto en este modelo (suma parcial)</b>` : "") + `</span>`;
+  }
   if (colorMode === "dt24") $("legendTicks").innerHTML += `<span style="flex-basis:100%;text-align:left">azul: más frío que ayer · rojo: más cálido · sin color: cambio menor de 0,5 °C · las primeras 24 h del pronóstico no tienen día anterior</span>`;
   $("legendTicks").title = p.title + " (" + p.unit + ")" + (colorMode === "viento" ? " · línea blanca: umbral de aviso " + UMB_W + " m/s" : "");
 }
@@ -762,7 +797,7 @@ function updateTerrainColors() {
 }
 function pintarTerreno(colorMode) {                // el parámetro tapa al global: todo lo de abajo usa el modo efectivo
   const m = MODELS[model], n = terrLon.length;
-  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" || colorMode === "apagado" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : hours.toFixed(2));
+  const key = model + colorMode + (satTex ? "s" : "") + (colorMode === "relieve" || colorMode === "natural" || colorMode === "apagado" ? "" : colorMode === "lluvia" ? rainStep(m, hours) : colorMode === "pp24" ? dia24(hours) : hours.toFixed(2));
   if (key === lastTerrKey) return;           // nada cambió: no recalcular 49 000 vértices
   lastTerrKey = key;
   const mat = terrain.material, wantMap = colorMode === "natural" && satTex ? satTex : null;
@@ -781,6 +816,17 @@ function pintarTerreno(colorMode) {                // el parámetro tapa al glob
       const qi = p.idx(v), q = qi * 3, a = Math.min(1, 0.45 + 0.55 * Math.abs(v) / p.max);
       terrColors[i*3]=b0+(L[q]-b0)*a; terrColors[i*3+1]=b1+(L[q+1]-b1)*a; terrColors[i*3+2]=b2+(L[q+2]-b2)*a;
     }
+  }
+  else if (colorMode === "pp24") {                 // lluvia del día 7-7: colores fijos de 1 mm, como el mapa de referencia
+    const L24 = lluvia24(m, dia24(hours)), p = PAL.pp24;
+    const V = L24.hay ? applySampler(m.sTerr, L24.V, 1) : null;
+    for (let i = 0; i < n; i++) {
+      const b0 = base[i*3]*dim+0.03, b1 = base[i*3+1]*dim+0.04, b2 = base[i*3+2]*dim+0.05, v = V ? V[i] : 0;
+      if (!(v >= 1)) { terrColors[i*3]=b0; terrColors[i*3+1]=b1; terrColors[i*3+2]=b2; continue; }
+      const c = p.f(v), a = 0.92;
+      terrColors[i*3]=b0+(c[0]-b0)*a; terrColors[i*3+1]=b1+(c[1]-b1)*a; terrColors[i*3+2]=b2+(c[2]-b2)*a;
+    }
+    drawLegend();                                  // la leyenda dice qué día 7-7 se está mostrando
   }
   else if (colorMode === "temperatura") {
     const T = terrainField(m, "t2", 0.1), p = PAL.temperatura, L = p.lut;
@@ -1751,7 +1797,7 @@ renderer.domElement.addEventListener("pointermove", ev => {
   const dvs = DVL.length ? DVL.map(p => zMean(m, p) > g ? (v => v === v ? (v > 0 ? "+" : "") + v.toFixed(1) : "—")(at("dv" + p, 1)) : "—").join(" / ") : null;
   const pwt = m.steps[a].pw ? `Agua precipitable ${at("pw", 1).toFixed(0)} mm<br>` : "";
   const om = m.steps[a].w500 ? WL.map(p => zMean(m, p) > g ? omega(at("w" + p, 1), p).toFixed(2) : "—").join(" / ") : null;
-  tip.innerHTML = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}° · ${Math.round(g * 1000)} m<br>T ${T.toFixed(1)} °C${d24 === d24 ? ` (${d24 >= 0 ? "+" : ""}${d24.toFixed(1)} en 24 h)` : ""} · lluvia ${r.toFixed(1)} mm/3h<br>Nubes baja/media/alta (${model}) ${nat}<br>${pwt}${qs ? `Rel. mezcla 925/850/700/500 ${qs} g/kg<br>` : ""}${dvs ? `Divergencia ${DVL.join("/")} ${dvs} ×10⁻⁵ s⁻¹<br>` : ""}${ws ? `w 850/700/500/300 ${ws} cm/s<br>ω 850/700/500/300 ${om} Pa/s<br>` : ""}${tl ? `T ${TL.join("/")} ${tl} °C<br>Advección T ${TL.join("/")} ${tav} °C/día<br>` : ""}${qav ? `Advección q ${QAL.join("/")} ${qav} g/kg/día<br>` : ""}${vtxt}<br>CAPE ${Math.round(at("cape",1))} J/kg${m.steps[a].slp ? ` · PNM ${at("slp", 0.1).toFixed(1)} hPa` : ""}${m.steps[a].z500 ? ` · Z500 ${Math.round(at("z500", 1))} m` : ""}`;
+  tip.innerHTML = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}° · ${Math.round(g * 1000)} m<br>T ${T.toFixed(1)} °C${d24 === d24 ? ` (${d24 >= 0 ? "+" : ""}${d24.toFixed(1)} en 24 h)` : ""} · lluvia ${r.toFixed(1)} mm/3h<br>${(L24 => L24.hay ? `Lluvia del día 7–7 h: ${bil(m.lons, m.lats, L24.V, q.lon, q.lat).toFixed(1)} mm${L24.completo ? "" : " (parcial)"}<br>` : "")(lluvia24(m, dia24(hours)))}Nubes baja/media/alta (${model}) ${nat}<br>${pwt}${qs ? `Rel. mezcla 925/850/700/500 ${qs} g/kg<br>` : ""}${dvs ? `Divergencia ${DVL.join("/")} ${dvs} ×10⁻⁵ s⁻¹<br>` : ""}${ws ? `w 850/700/500/300 ${ws} cm/s<br>ω 850/700/500/300 ${om} Pa/s<br>` : ""}${tl ? `T ${TL.join("/")} ${tl} °C<br>Advección T ${TL.join("/")} ${tav} °C/día<br>` : ""}${qav ? `Advección q ${QAL.join("/")} ${qav} g/kg/día<br>` : ""}${vtxt}<br>CAPE ${Math.round(at("cape",1))} J/kg${m.steps[a].slp ? ` · PNM ${at("slp", 0.1).toFixed(1)} hPa` : ""}${m.steps[a].z500 ? ` · Z500 ${Math.round(at("z500", 1))} m` : ""}`;
   tip.hidden = false; tip.style.left = Math.min(innerWidth - 270, ev.clientX + 14) + "px"; tip.style.top = (ev.clientY + 14) + "px";
 });
 renderer.domElement.addEventListener("pointerleave", () => $("tip").hidden = true);
@@ -1834,7 +1880,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
     seg("segModel", Object.keys(MODELS).map(k => [k, k]), () => model, v => { model = v; volKeyA = volKeyB = null; humKey = ""; modelNote(); drawHumLegend(); isoNota(); if (selected) selectPoint(selected); });   // la tabla diaria y su texto dependen del modelo
     colorMode = "lluvia";                        // al abrir: lluvia sobre el terreno (con la imagen satelital de fondo) y nubes apagadas
     if (window.DATOS.satelite) loadSatellite(window.DATOS.satelite);
-    seg("segColor", (window.DATOS.satelite ? [["natural","Natural"]] : []).concat([["relieve","Relieve"],["temperatura","Temperatura"],["dt24","ΔT 24 h"],["lluvia","Lluvia"],["viento","Viento"],["cape","CAPE"]]).concat(Object.values(MODELS).some(m => m.steps[0] && m.steps[0].pw) ? [["pwat","PWAT"]] : []), () => colorMode, v => { colorMode = v; drawLegend(); });
+    seg("segColor", (window.DATOS.satelite ? [["natural","Natural"]] : []).concat([["relieve","Relieve"],["temperatura","Temperatura"],["dt24","ΔT 24 h"],["lluvia","Lluvia"],["pp24","Lluvia 24 h"],["viento","Viento"],["cape","CAPE"]]).concat(Object.values(MODELS).some(m => m.steps[0] && m.steps[0].pw) ? [["pwat","PWAT"]] : []), () => colorMode, v => { colorMode = v; drawLegend(); });
     // Avisos de viento: panel plegable (cerrado al abrir; se recuerda) y umbrales (se recuerdan en este navegador)
     $("avisoGrp").hidden = !CFG.avisos;
     $("avisoGrp").addEventListener("toggle", () => updateAvisos());
