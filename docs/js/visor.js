@@ -1524,6 +1524,16 @@ function pronValor(s, fe, i) {                  // {v, ob}: observado si existe,
   const p = s.pron[fe]; if (p && p.c[i] != null) return {v: p.c[i], ob: false, p};
   return null;
 }
+// lo que dibuja el gráfico: "cons" = consenso, o un modelo solo (ya calibrado). La tabla sigue mostrando el consenso.
+let pronVer = "cons";
+try { pronVer = localStorage.getItem("pronVer") || "cons"; } catch (e) {}
+function valGraf(s, fe, i) {
+  if (pronVer === "cons") return pronValor(s, fe, i);
+  const o = s.obs[fe]; if (o && o[i] != null) return {v: o[i], ob: true};
+  const p = s.pron[fe], x = p && p.m[pronVer]; if (x && x[i] != null) return {v: x[i], ob: false, p};
+  return null;
+}
+const nubGraf = p => !p ? null : pronVer === "cons" ? p.c[3] : p.m[pronVer] ? p.m[pronVer][3] : null;
 function sitioDePunto(p) {
   if (!PRON) return null;
   const s = PRON.sitios.find(x => x.id === "p:" + p.nombre); if (s) return s;
@@ -1568,15 +1578,21 @@ function corridasAnt(s) {
 }
 function leyendaPron(s) {
   const dd = r => r.slice(8, 10) + "/" + r.slice(5, 7), hace = r => Math.round((Date.parse(PRON.hoy) - Date.parse(r)) / 864e5);
-  $("pronLeg").innerHTML = `<span><i style="border-color:#ff8a4c"></i>Tmáx observada</span><span><i class="dash" style="border-color:#ff8a4c"></i>Tmáx pronosticada</span>` +
-    `<span><i style="border-color:#7aa7ff"></i>Tmín observada</span><span><i class="dash" style="border-color:#7aa7ff"></i>Tmín pronosticada</span>` +
-    `<span><i class="box" style="background:#5aa8ff;border-color:#5aa8ff"></i>Lluvia observada</span><span><i class="box" style="background:rgba(90,168,255,.25);border-color:#5aa8ff"></i>Lluvia pronosticada</span>` +
-    `<span><i class="box" style="background:rgba(143,160,177,.25);border-color:transparent"></i>Rango de los modelos</span>` +
-    corridasAnt(s).filter(a => Object.keys(a.d).length).map(a => `<span><i class="dash" style="border-color:${a.col}"></i>Pronóstico de la corrida del ${dd(a.r)} (hace ${hace(a.r)} día${hace(a.r) > 1 ? "s" : ""})</span>`).join("");
+  const cons = pronVer === "cons", q = cons ? "" : ` <b style="color:${MCOL[pronVer]}">${pronVer}</b>`;
+  $("pronLeg").innerHTML = `<span><i style="border-color:#ff8a4c"></i>Tmáx observada</span><span><i class="dash" style="border-color:#ff8a4c"></i>Tmáx pronosticada${q}</span>` +
+    `<span><i style="border-color:#7aa7ff"></i>Tmín observada</span><span><i class="dash" style="border-color:#7aa7ff"></i>Tmín pronosticada${q}</span>` +
+    `<span><i class="box" style="background:#5aa8ff;border-color:#5aa8ff"></i>Lluvia observada</span><span><i class="box" style="background:rgba(90,168,255,.25);border-color:#5aa8ff"></i>Lluvia pronosticada${q}</span>` +
+    (cons ? `<span><i class="box" style="background:rgba(143,160,177,.25);border-color:transparent"></i>Rango de los modelos</span>` :
+            `<span>${pronVer} solo, ya calibrado (corregido a la altitud y por su error en esta red)</span>`) +
+    (cons ? corridasAnt(s) : []).filter(a => Object.keys(a.d).length).map(a => `<span><i class="dash" style="border-color:${a.col}"></i>Pronóstico de la corrida del ${dd(a.r)} (hace ${hace(a.r)} día${hace(a.r) > 1 ? "s" : ""})</span>`).join("");
 }
 function renderPronPunto() {
   const s = pronSitio, P = PRON; if (!s) return;
   $("pronMeta").textContent = `${s.dep}${s.prov ? " · " + s.prov : ""} · ${s.alt} m${s.est ? " · estación " + s.est : " · sin estación cercana: se calibra con el sesgo de toda la región"}`;
+  if (pronVer !== "cons" && !P.modelos.includes(pronVer)) pronVer = "cons";
+  seg("segPronVer", [["cons", "Consenso"], ...P.modelos.map(m => [m, m])], () => pronVer,
+      v => { pronVer = v; try { localStorage.setItem("pronVer", v); } catch (e) {} leyendaPron(pronSitio); drawPron(); });
+  [...$("segPronVer").children].forEach((b, i) => { if (i) b.style.boxShadow = `inset 0 -3px 0 ${MCOL[P.modelos[i - 1]]}`; });
   leyendaPron(s); drawPron();
   const ANT = corridasAnt(s), ddA = r => r.slice(8, 10) + "/" + r.slice(5, 7);
   const mods = P.modelos, verM = $("pronPorModelo").checked, iH = P.fechas.indexOf(P.hoy);
@@ -1608,7 +1624,7 @@ function renderPronPunto() {
     (ses.length ? "Corrección aplicada (lo que cada modelo suele errar aquí): " + ses.map(([m, v]) => `<b>${m}</b> ${lado(v[1], "Tmáx")}, ${lado(v[0], "Tmín")} (${v[2]} datos)`).join(" · ") + ". " :
                   (s.est ? "Aún no hay días suficientes para corregir los modelos en esta estación: se usa la corrección de la región si existe. " : "")) +
     `<br><b>Día de 7 h a 7 h</b>: Tmín = noche que termina a las 7 h; Tmáx = de 7 a 19 h; lluvia = de 7 h a 7 h del día siguiente (como la red Voz y Data). ` +
-    `<b>Negrita</b> = observado; <i>cursiva</i> = pronóstico (consenso de los modelos calibrados, con su rango debajo). T = traza. ` +
+    `<b>Negrita</b> = observado; <i>cursiva</i> = pronóstico (consenso de los modelos calibrados, con su rango debajo: temperaturas = promedio pesado por el acierto de cada modelo; lluvia = <b>mediana</b> pesada, para que un solo modelo muy lluvioso no arrastre el valor). T = traza. Con los botones de <b>Gráfico</b> puedes ver cada modelo por separado. ` +
     `Los modelos se llevan a la altitud real de la estación (6.5 °C/km) y se les resta el error medio de los últimos 30 días; la lluvia se escala según cuánto llovió de verdad frente a lo pronosticado en la región. Nubosidad = nubes bajas y medias juntas, de 7 a 19 h.`;
 }
 // nubes y lluvia por momento del día (consenso de los modelos; lluvia calibrada como la del día)
@@ -1641,8 +1657,8 @@ function drawPron() {
   const iH = Math.max(0, F.indexOf(P.hoy));
   // rango de temperatura
   const all = [];
-  const ANT = corridasAnt(s);
-  F.forEach(fe => { for (const k of [0, 1]) { const v = pronValor(s, fe, k); if (v) all.push(v.v); const p = s.pron[fe]; if (p && !(v && v.ob)) { if (p.rng[2*k] != null) all.push(p.rng[2*k], p.rng[2*k+1]); }
+  const cons = pronVer === "cons", ANT = cons ? corridasAnt(s) : [];
+  F.forEach(fe => { for (const k of [0, 1]) { const v = valGraf(s, fe, k); if (v) all.push(v.v); const p = s.pron[fe]; if (cons && p && !(v && v.ob)) { if (p.rng[2*k] != null) all.push(p.rng[2*k], p.rng[2*k+1]); }
     for (const a of ANT) if (a.d[fe] && a.d[fe][k] != null) all.push(a.d[fe][k]); } });
   if (!all.length) { c.fillStyle = "#8fa0b1"; c.fillText("Sin datos para este lugar", L, 40); return; }
   const tmin = Math.floor(Math.min(...all) - 1), tmax = Math.ceil(Math.max(...all) + 1.5);
@@ -1661,7 +1677,7 @@ function drawPron() {
   // temperaturas: rango de los modelos, línea (continua = observado, a trazos = pronóstico) y valores
   for (const [k, col, arriba] of [[1, "#ff8a4c", true], [0, "#7aa7ff", false]]) {
     c.fillStyle = k ? "rgba(255,138,76,.16)" : "rgba(122,167,255,.16)";
-    const band = F.map((fe, i) => { const p = s.pron[fe], v = pronValor(s, fe, k); return p && v && !v.ob && p.rng[2*k] != null ? [X(i), Y(p.rng[2*k]), Y(p.rng[2*k+1])] : null; });
+    const band = F.map((fe, i) => { const p = s.pron[fe], v = pronValor(s, fe, k); return cons && p && v && !v.ob && p.rng[2*k] != null ? [X(i), Y(p.rng[2*k]), Y(p.rng[2*k+1])] : null; });
     for (let i = 0; i < n; i++) if (band[i]) { const a = band[i], b = band[i + 1];
       if (b) { c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.lineTo(b[0], b[2]); c.lineTo(a[0], a[2]); c.closePath(); c.fill(); }
       else c.fillRect(a[0] - 3, a[2], 6, a[1] - a[2]); }
@@ -1674,7 +1690,7 @@ function drawPron() {
       q.forEach(p => { if (p) { c.beginPath(); c.arc(p[0], p[1], 2.2, 0, 7); c.fill(); } });
       c.globalAlpha = 1;
     }
-    const pts = F.map((fe, i) => { const v = pronValor(s, fe, k); return v ? {x: X(i), y: Y(v.v), v: v.v, ob: v.ob} : null; });
+    const pts = F.map((fe, i) => { const v = valGraf(s, fe, k); return v ? {x: X(i), y: Y(v.v), v: v.v, ob: v.ob} : null; });
     c.strokeStyle = col; c.lineWidth = 2;
     for (let i = 0; i < n - 1; i++) { const a = pts[i], b = pts[i + 1]; if (!a || !b) continue;
       c.setLineDash(a.ob && b.ob ? [] : [5, 4]); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
@@ -1684,8 +1700,8 @@ function drawPron() {
       if (cw > 26) { c.fillStyle = p.ob ? "#e3eaf1" : col; c.textAlign = "center"; c.fillText(p.v.toFixed(cw > 40 ? 1 : 0), p.x, arriba ? p.y - 7 : p.y + 14); } });
   }
   // lluvia
-  const pv = F.map((fe, i) => pronValor(s, fe, 2));
-  const pm = Math.max(5, ...pv.filter(Boolean).map(v => v.v), ...F.map(fe => s.pron[fe] && s.pron[fe].rng[5] || 0),
+  const pv = F.map((fe, i) => valGraf(s, fe, 2));
+  const pm = Math.max(5, ...pv.filter(Boolean).map(v => v.v), ...F.map(fe => cons && s.pron[fe] && s.pron[fe].rng[5] || 0),
                       ...ANT.flatMap(a => F.map(fe => a.d[fe] && a.d[fe][2] || 0)));
   const YP = v => pBot - Math.min(1, v / pm) * (pBot - pTop);
   c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText(Math.round(pm) + "", L - 4, pTop + 8); c.fillText("mm", L - 4, pTop + 20);
@@ -1693,7 +1709,7 @@ function drawPron() {
   pv.forEach((v, i) => { if (!v) return;
     const x = X(i) - cw * 0.28, w = cw * 0.56, y = YP(v.v);
     const p = s.pron[F[i]];
-    if (!v.ob && p && p.rng[5] != null) { c.strokeStyle = "rgba(143,160,177,.6)"; c.beginPath(); c.moveTo(X(i), YP(p.rng[4])); c.lineTo(X(i), YP(p.rng[5])); c.stroke(); }
+    if (cons && !v.ob && p && p.rng[5] != null) { c.strokeStyle = "rgba(143,160,177,.6)"; c.beginPath(); c.moveTo(X(i), YP(p.rng[4])); c.lineTo(X(i), YP(p.rng[5])); c.stroke(); }
     if (v.ob) { c.fillStyle = "#5aa8ff"; c.fillRect(x, y, w, pBot - y); }
     else { c.fillStyle = "rgba(90,168,255,.25)"; c.fillRect(x, y, w, pBot - y); c.strokeStyle = "#5aa8ff"; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, pBot - y - 1); }
     if (cw > 24 && (v.v >= 0.05)) { c.fillStyle = v.ob ? "#e3eaf1" : "#9ccaff"; c.textAlign = "center"; c.fillText(ppF(v.v), X(i), y - 3); }
@@ -1707,9 +1723,10 @@ function drawPron() {
   c.strokeStyle = "#253342"; c.beginPath(); c.moveTo(L, pBot); c.lineTo(R, pBot); c.stroke();
   // nubosidad baja+media (solo pronóstico)
   c.fillStyle = "#8fa0b1"; c.textAlign = "right"; c.fillText("Nub.", L - 4, nTop + 10);
-  F.forEach((fe, i) => { const p = s.pron[fe]; if (!p || p.c[3] == null) return;
-    const v = p.c[3] / 100; c.fillStyle = `rgba(230,236,242,${0.06 + 0.85 * v})`; c.fillRect(L + cw * i + 1, nTop, cw - 2, nH);
-    if (cw > 30) { c.fillStyle = v > 0.5 ? "#0b1118" : "#e3eaf1"; c.textAlign = "center"; c.fillText(p.c[3] + "%", X(i), nTop + 10); } });
+  F.forEach((fe, i) => { const nb = nubGraf(s.pron[fe]); if (nb == null) return;
+    const v = nb / 100; c.fillStyle = `rgba(230,236,242,${0.06 + 0.85 * v})`; c.fillRect(L + cw * i + 1, nTop, cw - 2, nH);
+    if (cw > 30) { c.fillStyle = v > 0.5 ? "#0b1118" : "#e3eaf1"; c.textAlign = "center"; c.fillText(Math.round(nb) + "%", X(i), nTop + 10); } });
+  if (!cons) { c.fillStyle = MCOL[pronVer]; c.textAlign = "right"; c.fillText(pronVer + " calibrado", R - 2, tTop - 4); }
   // días
   F.forEach((fe, i) => { c.fillStyle = fe === P.hoy ? "#4fc3e8" : "#8fa0b1"; c.textAlign = "center";
     const t = fmtF(fe); c.fillText(cw > 38 ? t : t.slice(-2), X(i), H - 8); });
