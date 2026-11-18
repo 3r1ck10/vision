@@ -551,6 +551,11 @@ const CAMPOS = {
       lev: {925: [0, 20, 2], 850: [0, 18, 2], 700: [0, 12, 1], 500: [0, 6, 0.5]},       // [mín, máx, isolínea]
       stops: ["#8a5a2e", "#c9a35e", "#a9c55a", "#3fae6a", "#2a90b8", "#3557c9", "#8a3bc4"],
       nota: "isohúmedas"},
+  // humedad relativa (%) del nivel, la misma que usan las nubes (sobre hielo bajo 0 °C, igual en todos los modelos)
+  rh: {nombre: "Humedad relativa", unidad: "%", escala: 1, cero: false,
+      lev: Object.fromEntries([1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100].map(p => [p, [0, 100, 10]])),
+      stops: ["#7a4a22", "#b8864a", "#e0cf96", "#b9d98a", "#4cb56a", "#1f8a7a", "#1f4f9e"],
+      nota: "marrón = aire seco, verde = húmedo (≥ 70 %), azul = casi saturado (posible nube)"},
   w: {nombre: "Viento vertical", unidad: "cm/s", escala: 100, cero: true,
       // la mayoría de valores está entre −8 y +15 cm/s (percentiles 2–98 de ETA y ECMWF); los núcleos convectivos saturan en rojo
       lev: {925: [-10, 10, 2], 850: [-10, 10, 2], 700: [-15, 15, 3], 600: [-15, 15, 3], 500: [-15, 15, 3],
@@ -737,7 +742,7 @@ function updateHum() {
 }
 function drawHumLegend() {
   const box = $("humLegend");
-  $("campoCnt").textContent = humVar === "off" || humLevel === "off" ? "" : ({q: "humedad ", w: "w ", t: "T ", ta: "adv. T ", qa: "adv. q ", dv: "div. "})[humVar] + humLevel;
+  $("campoCnt").textContent = humVar === "off" || humLevel === "off" ? "" : ({q: "humedad ", rh: "HR ", w: "w ", t: "T ", ta: "adv. T ", qa: "adv. q ", dv: "div. "})[humVar] + humLevel;
   if (humVar === "off" || humLevel === "off") { box.hidden = true; return; }
   box.hidden = false; const C = CAMPOS[humVar], [lo, hi, iso] = C.lev[humLevel], cv = $("humCv"), ctx = cv.getContext("2d");
   for (let x = 0; x < cv.width; x++) { const c = C.ramp(x / (cv.width - 1)); ctx.fillStyle = `rgb(${c[0]*255|0},${c[1]*255|0},${c[2]*255|0})`; ctx.fillRect(x, 0, 1, cv.height); }
@@ -2076,7 +2081,7 @@ function load(name) { const d = (window.DATOS || {})[name]; if (!d) throw new Er
       setCampoNivel(humLevel);
     };
     const hayCampo = v => Object.keys(CAMPOS[v].lev).some(p => Object.values(MODELS).some(m => campoDisponible(m, v, p)));
-    seg("segHum", [["off","No"],["q","Humedad"],["w","Viento vertical"],["t","Temperatura"],["ta","Advección T"],["qa","Advección q"],["dv","Divergencia"]].filter(([v]) => v === "off" || hayCampo(v)), () => humVar, v => { humVar = v; humKey = ""; windKey = null; buildLevSeg(); drawHumLegend(); });
+    seg("segHum", [["off","No"],["q","Humedad (g/kg)"],["rh","Humedad relativa"],["w","Viento vertical"],["t","Temperatura"],["ta","Advección T"],["qa","Advección q"],["dv","Divergencia"]].filter(([v]) => v === "off" || hayCampo(v)), () => humVar, v => { humVar = v; humKey = ""; windKey = null; buildLevSeg(); drawHumLegend(); });
     buildLevSeg();
     const Q = {alta: [120, 1.25], media: [80, 1], baja: [48, 0.75]};
     let quality = "media";
