@@ -111,6 +111,7 @@
     <div class="sub" id="ptMeta"></div>
   </div>
   <button type="button" class="pbtn" id="ptPron" hidden>Pronóstico aproximado: observado + calibrado →</button>
+  <button type="button" class="pbtn" id="ptPerfil">Tiempo–altura: humedad relativa y viento por niveles →</button>
   <div class="lbl" title="Valor instantáneo cada 3 h (ETA cada 6 h): no es la máxima ni la mínima; esas están en la tabla de abajo">Temperatura del aire a 2 m (°C), cada 3 h · una línea por modelo</div>
   <canvas id="meteo"></canvas>
   <div class="tblwrap"><table id="daily"></table></div>
@@ -119,6 +120,18 @@
     <span class="lbl">Ver en internet</span>
     <div class="links" id="ptLinks"></div>
   </div>
+</aside>
+
+<aside id="perfil" class="ui" hidden role="dialog" aria-modal="true" aria-labelledby="perfTit">
+  <button class="x" id="closePerf" type="button" aria-label="Cerrar">✕</button>
+  <div>
+    <h2 id="perfTit">Tiempo–altura</h2>
+    <div class="sub" id="perfSub"></div>
+  </div>
+  <div class="pr-top"><span class="sub">Modelo:</span><div class="seg" id="segPerf"></div></div>
+  <div class="pr-leg" id="perfLeg"></div>
+  <div class="mapa-wrap"><canvas id="perfCv"></canvas><div id="perfTip" class="mapa-tip" hidden></div></div>
+  <div class="note" id="perfNota"></div>
 </aside>
 
 <aside id="pron" class="ui" hidden role="dialog" aria-modal="true" aria-labelledby="pronTit">

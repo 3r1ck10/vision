@@ -1455,7 +1455,7 @@ function selectPoint(p) {
   ].map(([t, u]) => `<a href="${u}" target="_blank" rel="noopener">${t} ↗</a>`).join("");
   drawMeteo();
 }
-$("closePt").onclick = () => { $("point").hidden = true; selected = null; PUNTOS.forEach(q => q.el.classList.remove("sel")); };
+$("closePt").onclick = () => { $("point").hidden = true; $("perfil").hidden = true; selected = null; PUNTOS.forEach(q => q.el.classList.remove("sel")); };
 
 // ---------- Meteograma ----------
 const MCOL = {GFS: "#ff8a4c", ETA: "#c7a3ff", WRF: "#7be0a8", ECMWF: "#4fc3e8"};
@@ -1515,6 +1515,182 @@ function drawMeteo() {
   c.fillText(`${cur.t.toFixed(1)}°C`, X(hours) + (hours > SPAN * 0.7 ? -4 : 4), Y(cur.t) - 4);
 }
 $("meteo").addEventListener("click", e => { const r = e.target.getBoundingClientRect(); const h = (e.clientX - r.left - 30) / (r.width - 38) * SPAN; setHours(Math.max(0, Math.min(SPAN, h))); });
+
+// ---------- Diagrama tiempo–altura de un punto: humedad relativa (color) + viento (barbas) por niveles ----------
+// Eje x = tiempo (hora local), eje y = presión (escala logarítmica, como la altura). Valores del modelo en su malla,
+// interpolados al punto. Bajo la presión del suelo del modelo en ese punto no se dibuja (relieve).
+let perfModel = null, perfCache = null;
+const PERF_TOP = 200;                                    // hPa: tope del diagrama
+function perfilDatos(m, p) {
+  const s = makeSampler(m.lons, m.lats, [p.lon], [p.lat]);
+  const hm = applySampler(s, m.hgt, 1)[0];
+  const P = (m.plev || []).filter(q => q >= PERF_TOP && m.steps[0]["rh" + q]).sort((a, b) => b - a);
+  const z = P.map(q => { const l = m.plev.indexOf(q), v = m.zlev && m.zlev[l] ? applySampler(s, m.zlev[l], 1)[0] : NaN; return v === v ? v : pHeight(q) * 1000; });
+  const WL = Object.keys(m.steps[0]).map(k => /^u(\d+)$/.exec(k)).filter(r => r && +r[1] >= PERF_TOP && +r[1] <= 1000 && m.steps[0]["v" + r[1]]).map(r => +r[1]).sort((a, b) => b - a);
+  const rh = m.steps.map(st => P.map(q => applySampler(s, st["rh" + q], 1)[0]));
+  const tt = m.steps.map(st => P.map(q => st["t" + q] ? applySampler(s, st["t" + q], 0.1)[0] : NaN));
+  const uv = m.steps.map(st => WL.map(q => [applySampler(s, st["u" + q], 0.1)[0], applySampler(s, st["v" + q], 0.1)[0]]));
+  // presión del suelo del modelo en el punto: donde la altura de los niveles corta su relieve (interpolando en log p)
+  let ps = P[0];
+  if (hm === hm && z[0] < hm) for (let i = 0; i < P.length - 1; i++) if (z[i] <= hm && z[i + 1] > hm) {
+    const f = (hm - z[i]) / (z[i + 1] - z[i]); ps = Math.exp(Math.log(P[i]) + f * (Math.log(P[i + 1]) - Math.log(P[i]))); break; }
+  return {P, z, WL, rh, tt, uv, hm, ps, abs: m.abs};
+}
+// barba de viento (nudos): asta hacia donde viene el viento; banderín 50 kt, barba 10 kt, media barba 5 kt
+function barba(c, x, y, u, v, lado) {
+  const kt = Math.hypot(u, v) * 1.94384;
+  if (!(kt === kt)) return;
+  if (kt < 2.5) { c.beginPath(); c.arc(x, y, 3, 0, 7); c.stroke(); return; }
+  const dx = -u / Math.hypot(u, v), dy = v / Math.hypot(u, v), Ls = 17;        // en pantalla y crece hacia abajo
+  const nx = -dy * lado, ny = dx * lado;
+  let r = Math.round(kt / 5) * 5, pos = Ls;
+  c.beginPath(); c.moveTo(x, y); c.lineTo(x + dx * Ls, y + dy * Ls);
+  const pts = [];
+  while (r >= 50) { pts.push(["b", pos]); pos -= 6; r -= 50; }
+  while (r >= 10) { pts.push(["f", pos]); pos -= 3.2; r -= 10; }
+  if (r >= 5) pts.push(["h", pos === Ls ? pos - 3.2 : pos]);
+  for (const [t, d] of pts) {
+    const bx = x + dx * d, by = y + dy * d;
+    if (t === "b") { c.moveTo(bx, by); c.lineTo(bx + nx * 8 - dx * 3, by + ny * 8 - dy * 3); c.lineTo(bx - dx * 6, by - dy * 6); }
+    else { const k = t === "f" ? 8 : 4.5; c.moveTo(bx, by); c.lineTo(bx + nx * k + dx * k * 0.35, by + ny * k + dy * k * 0.35); }
+  }
+  c.stroke();
+  for (const [t, d] of pts) if (t === "b") { const bx = x + dx * d, by = y + dy * d;
+    c.beginPath(); c.moveTo(bx, by); c.lineTo(bx + nx * 8 - dx * 3, by + ny * 8 - dy * 3); c.lineTo(bx - dx * 6, by - dy * 6); c.closePath(); c.fill(); }
+}
+function perfGeom(W, H, D) {
+  // abajo empieza un poco bajo el suelo del modelo en el punto: en la sierra no se desperdicia la mitad del gráfico
+  const L = 52, R = W - 52, T = 12, B = H - 58, pB = Math.min(Math.max(D.P[0], 1000), D.ps * 1.035), pT = PERF_TOP;
+  const Y = p => B - (Math.log(pB) - Math.log(p)) / (Math.log(pB) - Math.log(pT)) * (B - T);
+  const pY = y => Math.exp(Math.log(pB) - (B - y) / (B - T) * (Math.log(pB) - Math.log(pT)));
+  const X = h => L + (h / SPAN) * (R - L);
+  return {L, R, T, B, Y, pY, X, hX: x => (x - L) / (R - L) * SPAN};
+}
+// valor de HR en (h, p) por interpolación bilineal (tiempo lineal, presión en log)
+function perfRH(D, h, p) {
+  const A = D.abs; if (h < A[0] || h > A[A.length - 1] || p > D.ps) return NaN;
+  let k = 0; while (k < A.length - 2 && A[k + 1] < h) k++;
+  const f = A[k + 1] > A[k] ? Math.max(0, Math.min(1, (h - A[k]) / (A[k + 1] - A[k]))) : 0;
+  const P = D.P; let i = 0; while (i < P.length - 2 && P[i + 1] > p) i++;
+  const g = Math.max(0, Math.min(1, (Math.log(P[i]) - Math.log(p)) / (Math.log(P[i]) - Math.log(P[i + 1]))));
+  const v = (r, j) => D.rh[r][j];
+  const a = v(k, i) * (1 - g) + v(k, i + 1) * g, b = v(k + 1, i) * (1 - g) + v(k + 1, i + 1) * g;
+  return a * (1 - f) + b * f;
+}
+function perfFondo(W, H, D, dpr) {           // lo que no cambia con la hora: color, isohúmedas, 0 °C, barbas y ejes
+  const cv = document.createElement("canvas"); cv.width = W * dpr; cv.height = H * dpr;
+  const c = cv.getContext("2d"); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const G = perfGeom(W, H, D), {L, R, T, B, Y, X} = G, w = Math.round(R - L), hh = Math.round(B - T);
+  // color de HR píxel a píxel (en píxeles CSS) con isolíneas cada 10 % (más marcadas en 70 y 90 %)
+  const img = c.createImageData(w, hh), V = new Float32Array(w * hh), ramp = CAMPOS.rh.ramp;
+  for (let j = 0; j < hh; j++) { const p = G.pY(T + j + 0.5);
+    for (let i = 0; i < w; i++) V[j * w + i] = perfRH(D, G.hX(L + i + 0.5), p); }
+  for (let j = 0; j < hh; j++) for (let i = 0; i < w; i++) {
+    const k = j * w + i, v = V[k], o = 4 * k;
+    if (!(v === v)) { const suelo = G.pY(T + j + 0.5) > D.ps; img.data[o] = suelo ? 58 : 14; img.data[o + 1] = suelo ? 44 : 22; img.data[o + 2] = suelo ? 30 : 31; img.data[o + 3] = 255; continue; }
+    const col = ramp(Math.max(0, Math.min(1, v / 100)));
+    let r = col[0] * 255, g = col[1] * 255, b = col[2] * 255;
+    const a0 = Math.floor(v / 10), vr = i + 1 < w ? V[k + 1] : v, vd = j + 1 < hh ? V[k + w] : v;
+    const ar = vr === vr ? Math.floor(vr / 10) : a0, ad = vd === vd ? Math.floor(vd / 10) : a0;
+    if (ar !== a0 || ad !== a0) { const lv = Math.max(a0, ar, ad) * 10, s = lv === 70 || lv === 90 ? 0.75 : 0.3; r += (255 - r) * s; g += (255 - g) * s; b += (255 - b) * s; }
+    img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+  }
+  const tmp = document.createElement("canvas"); tmp.width = w; tmp.height = hh; tmp.getContext("2d").putImageData(img, 0, 0);
+  c.imageSmoothingEnabled = true; c.drawImage(tmp, L, T, w, hh);
+  // relieve: línea de la presión del suelo del modelo
+  if (D.ps < D.P[0] || D.ps < 1000) { c.strokeStyle = "#c9a35e"; c.lineWidth = 1.5; c.beginPath(); c.moveTo(L, Y(D.ps)); c.lineTo(R, Y(D.ps)); c.stroke();
+    c.fillStyle = "#e0cf96"; c.font = "10px 'IBM Plex Mono', monospace"; c.textAlign = "left"; c.fillText(`suelo del modelo ≈ ${Math.round(D.ps)} hPa (${Math.round(D.hm)} m)`, L + 4, Math.min(B - 4, Y(D.ps) + 12)); }
+  // isoterma de 0 °C (nivel de congelación): primer cruce de + a − subiendo
+  // (la temperatura no viene en todos los niveles: se usan los que tienen dato, desde el suelo hacia arriba)
+  const z0 = D.abs.map((h, k) => { const t = D.tt[k], ok = D.P.map((q, i) => [q, t[i]]).filter(([q, v]) => v === v);
+    // desde el suelo: el primer nivel válido sobre el suelo y, si hay, el último bajo el suelo (para no perder el cruce cerca del relieve)
+    for (let i = 0; i < ok.length - 1; i++) { const [pa, a] = ok[i], [pb, b] = ok[i + 1]; if (pb > D.ps) continue;
+      if (a > 0 && b <= 0) { const f = a / (a - b), pc = Math.exp(Math.log(pa) + f * (Math.log(pb) - Math.log(pa))); return pc <= D.ps ? [X(h), Y(pc)] : null; } }
+    return null; });
+  c.strokeStyle = "#ffffff"; c.lineWidth = 2; c.setLineDash([6, 4]); c.beginPath(); let ini = true;
+  z0.forEach((q, k) => { if (!q || D.abs[k] > SPAN) { ini = true; return; } ini ? c.moveTo(q[0], q[1]) : c.lineTo(q[0], q[1]); ini = false; }); c.stroke(); c.setLineDash([]);
+  const pri = z0.find((q, k) => q && D.abs[k] >= 0 && D.abs[k] <= SPAN);
+  if (pri) { c.font = "bold 11px sans-serif"; c.textAlign = "left"; c.lineWidth = 3; c.strokeStyle = "rgba(8,12,18,.8)"; c.strokeText("0 °C", pri[0] + 4, pri[1] - 6); c.fillStyle = "#fff"; c.fillText("0 °C", pri[0] + 4, pri[1] - 6); }
+  // barbas: cada paso que quepa (≥ 22 px), en los niveles con viento sobre el suelo
+  const lado = selected && selected.lat < 0 ? -1 : 1; let lastX = -99;
+  D.abs.forEach((h, k) => { if (h < 0 || h > SPAN) return; const x = X(h); if (x - lastX < 22) return; lastX = x;
+    D.WL.forEach((q, l) => { if (q > D.ps) return; const [u, v] = D.uv[k][l], y = Y(q);
+      c.strokeStyle = "rgba(8,12,18,.75)"; c.fillStyle = "rgba(8,12,18,.75)"; c.lineWidth = 3; barba(c, x, y, u, v, lado);
+      c.strokeStyle = "#f4f7fa"; c.fillStyle = "#f4f7fa"; c.lineWidth = 1.3; barba(c, x, y, u, v, lado); }); });
+  // ejes: presión a la izquierda, altura del nivel en el punto a la derecha
+  c.font = "10px 'IBM Plex Mono', monospace"; c.fillStyle = "#8fa0b1"; c.strokeStyle = "rgba(230,236,242,.18)"; c.lineWidth = 1;
+  D.P.forEach((q, i) => { const y = Y(q); if (y > B + 0.5) return; c.textAlign = "right"; c.fillText(q, L - 6, y + 3); c.textAlign = "left"; c.fillText((D.z[i] / 1000).toFixed(1) + " km", R + 6, y + 3);
+    c.beginPath(); c.moveTo(L, y); c.lineTo(R, y); c.stroke(); });
+  c.save(); c.translate(12, (T + B) / 2); c.rotate(-Math.PI / 2); c.textAlign = "center"; c.fillText("hPa", 0, 0); c.restore();
+  // días (hora local = UTC − 5) y marcas cada 6 h
+  for (let d = 0; d <= 7; d++) {
+    const md = d * 24 + 5; if (md >= 0 && md <= SPAN) { c.strokeStyle = "rgba(230,236,242,.55)"; c.beginPath(); c.moveTo(X(md), T); c.lineTo(X(md), B + 6); c.stroke(); }
+    for (const hl of [6, 12, 18]) { const h = d * 24 + 5 + hl; if (h < 0 || h > SPAN) continue; c.strokeStyle = "rgba(230,236,242,.25)"; c.beginPath(); c.moveTo(X(h), B); c.lineTo(X(h), B + 4); c.stroke();
+      if ((R - L) / SPAN * 6 > 22) { c.fillStyle = "#6f8193"; c.textAlign = "center"; c.fillText(String(hl).padStart(2, "0"), X(h), B + 13); } }
+    const date = new Date(T0 + (d * 24 + 17) * 3.6e6);
+    if (d * 24 + 17 < SPAN) { c.fillStyle = "#cfd8e1"; c.textAlign = "center"; c.fillText(`${DIAS[date.getUTCDay()]} ${date.getUTCDate()}`, X(d * 24 + 17), B + 26); }
+  }
+  c.strokeStyle = "#253342"; c.strokeRect(L + 0.5, T + 0.5, R - L - 1, B - T - 1);
+  // barra de colores de HR
+  const bx = L, by = H - 18, bw = Math.min(320, R - L);
+  for (let i = 0; i < bw; i++) { const col = ramp(i / (bw - 1)); c.fillStyle = `rgb(${col[0]*255|0},${col[1]*255|0},${col[2]*255|0})`; c.fillRect(bx + i, by, 1, 8); }
+  c.fillStyle = "#8fa0b1"; c.textAlign = "center"; [0, 20, 40, 60, 70, 80, 90, 100].forEach(v => c.fillText(v, bx + v / 100 * (bw - 1), by + 18 > H ? by - 2 : by - 3));
+  c.textAlign = "left"; c.fillText("HR %", bx + bw + 8, by + 8);
+  return cv;
+}
+function drawPerfil() {
+  if (!selected || $("perfil").hidden) return;
+  const m = MODELS[perfModel]; if (!m) return;
+  const cv = $("perfCv"), dpr = Math.min(2, devicePixelRatio), W = cv.clientWidth, H = cv.clientHeight;
+  const key = [perfModel, selected.nombre, selected.lat, selected.lon, W, H, dpr].join("|");
+  if (!perfCache || perfCache.key !== key) {
+    const D = perfilDatos(m, selected); perfCache = {key, D, img: D.P.length > 1 ? perfFondo(W, H, D, dpr) : null};
+    $("perfTit").textContent = "Tiempo–altura · " + selected.nombre;
+    $("perfSub").textContent = `${selected.lat.toFixed(3)}°, ${selected.lon.toFixed(3)}° · relieve ${Math.round(selected.g * 1000)} m · hora local (UTC−5)`;
+    notaPerfil();
+  }
+  cv.width = W * dpr; cv.height = H * dpr; const c = cv.getContext("2d"); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, cv.width, cv.height);
+  if (!perfCache.img) { c.setTransform(dpr, 0, 0, dpr, 0, 0); c.fillStyle = "#8fa0b1"; c.font = "13px sans-serif"; c.fillText(`${perfModel}: sin humedad por niveles en estos datos`, 20, 40); return; }
+  c.drawImage(perfCache.img, 0, 0); c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const G = perfGeom(W, H, perfCache.D), x = G.X(hours);
+  c.strokeStyle = "#4fc3e8"; c.lineWidth = 2; c.beginPath(); c.moveTo(x, G.T); c.lineTo(x, G.B); c.stroke();
+  c.fillStyle = "#4fc3e8"; c.font = "bold 10px 'IBM Plex Mono', monospace"; c.textAlign = hours > SPAN * 0.85 ? "right" : "left"; c.fillText(fmtTime(hours)[0], x + (hours > SPAN * 0.85 ? -4 : 4), G.T + 11);
+}
+function abrirPerfil() {
+  if (!selected) return;
+  if (!perfModel || !MODELS[perfModel]) perfModel = model;
+  $("perfil").hidden = false;
+  seg("segPerf", Object.keys(MODELS).map(k => [k, k]), () => perfModel, v => { perfModel = v; perfCache = null; drawPerfil(); });
+  [...$("segPerf").children].forEach((b, i) => b.style.boxShadow = `inset 0 -3px 0 ${MCOL[Object.keys(MODELS)[i]] || "transparent"}`);
+  perfCache = null; drawPerfil(); $("closePerf").focus();
+}
+function notaPerfil() {
+  const D = perfCache && perfCache.D; if (!D) return;
+  $("perfLeg").innerHTML = `<span><i class="box" style="background:linear-gradient(90deg,#7a4a22,#e0cf96,#4cb56a,#1f4f9e);border-color:transparent;width:40px"></i>Humedad relativa (%)</span>` +
+    `<span><i style="border-color:#fff"></i>Isohúmedas cada 10 % (marcadas 70 y 90 %)</span><span><i class="dash" style="border-color:#fff"></i>Isoterma de 0 °C</span>` +
+    `<span>Barbas: viento en nudos (media barba 5, barba 10, banderín 50)</span><span><i style="border-color:#4fc3e8"></i>Hora mostrada en el mapa</span>`;
+  $("perfNota").innerHTML = `Valores de <b>${perfModel}</b> en su malla, interpolados al punto. HR: ${D.P.length} niveles (${D.P[0]}–${D.P[D.P.length - 1]} hPa); viento: ${D.WL.join(", ")} hPa. ` +
+    `Bajo 0 °C la HR es sobre hielo (la misma con que el visor arma las nubes): 90–100 % indica capa casi saturada, probable nube. ` +
+    `Lo marrón oscuro de abajo es el relieve del modelo (${Math.round(D.hm)} m en este punto; el real es ${Math.round(selected.g * 1000)} m). ` +
+    `Pasa el cursor para ver los valores; clic para llevar el mapa a esa hora.`;
+}
+$("ptPerfil").onclick = abrirPerfil;
+$("closePerf").onclick = () => { $("perfil").hidden = true; };
+addEventListener("keydown", e => { if (e.key === "Escape" && !$("perfil").hidden) { e.stopImmediatePropagation(); $("perfil").hidden = true; } }, true);
+$("perfCv").addEventListener("mousemove", e => {
+  const tip = $("perfTip"), D = perfCache && perfCache.D; if (!D) return;
+  const r = e.target.getBoundingClientRect(), G = perfGeom(r.width, r.height, D), x = e.clientX - r.left, y = e.clientY - r.top;
+  if (x < G.L || x > G.R || y < G.T || y > G.B) { tip.hidden = true; return; }
+  const h = G.hX(x), p = G.pY(y), v = perfRH(D, h, p);
+  let k = 0; D.abs.forEach((a, i) => { if (Math.abs(a - h) < Math.abs(D.abs[k] - h)) k = i; });
+  let l = -1; D.WL.forEach((q, i) => { if (l < 0 || Math.abs(Math.log(q / p)) < Math.abs(Math.log(D.WL[l] / p))) l = i; });
+  let vt = ""; if (l >= 0 && D.WL[l] <= D.ps) { const [u, w] = D.uv[k][l], sp = Math.hypot(u, w), dir = (Math.atan2(-u, -w) * 180 / Math.PI + 360) % 360;
+    vt = `<br>Viento ${D.WL[l]} hPa (${fmtTime(D.abs[k])[0].split(" · ")[1]} h): ${Math.round(dir)}° · ${sp.toFixed(1)} m/s (${Math.round(sp * 1.94384)} kt)`; }
+  tip.innerHTML = `<b>${fmtTime(h)[0]}</b> · ${Math.round(p)} hPa<br>${v === v ? "HR " + Math.round(v) + " %" : p > D.ps ? "bajo el relieve del modelo" : "sin dato"}${vt}`;
+  tip.hidden = false; tip.style.left = Math.min(x + 14, r.width - 230) + "px"; tip.style.top = Math.max(0, y - 40) + "px";
+});
+$("perfCv").addEventListener("mouseleave", () => { $("perfTip").hidden = true; });
+$("perfCv").addEventListener("click", e => { const D = perfCache && perfCache.D; if (!D) return; const r = e.target.getBoundingClientRect(), G = perfGeom(r.width, r.height, D); setHours(Math.max(0, Math.min(SPAN, G.hX(e.clientX - r.left)))); });
 
 // ---------- Pronóstico aproximado: observado (estaciones Voz y Data) + pronóstico calibrado ----------
 // Datos de herramientas/pronostico.py (data/pronostico.js). Día de 7 h a 7 h. Por variable: si hay observado se muestra
@@ -1971,7 +2147,7 @@ function frame(now) {
   const [a, b] = fmtTime(hours); $("clock").innerHTML = `${a}<small>${b}</small>`;
   document.body.classList.toggle("conPunto", !$("point").hidden);   // la barra de navegación se corre si la ficha está abierta
   controls.update(); renderer.render(scene, camera); updateLabels();
-  if (selected && (meteoTick += dt) > 0.2) { meteoTick = 0; drawMeteo(); }
+  if (selected && (meteoTick += dt) > 0.2) { meteoTick = 0; drawMeteo(); drawPerfil(); }
   requestAnimationFrame(frame);
 }
 
